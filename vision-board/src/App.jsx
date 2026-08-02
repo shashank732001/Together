@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc, updateDoc } from 'firebase/firestore';
 
 // Safely loading your specific Firebase configuration
 let fbConfig;
@@ -40,6 +40,9 @@ const Icon = ({ name, size = 16, className = "", style = {} }) => {
         x: <><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>,
         lock: <><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>,
         arrowRight: <><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></>,
+        trash: <><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></>,
+        film: <><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18" /><line x1="7" y1="2" x2="7" y2="22" /><line x1="17" y1="2" x2="17" y2="22" /><line x1="2" y1="12" x2="22" y2="12" /><line x1="2" y1="7" x2="7" y2="7" /><line x1="2" y1="17" x2="7" y2="17" /><line x1="17" y1="17" x2="22" y2="17" /><line x1="17" y1="7" x2="22" y2="7" /></>,
+        undo: <><path d="M3 7v6h6" /><path d="M21 17a9 9 0 00-9-9 9 9 0 00-6 2.3L3 13" /></>,
         dining: <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2M7 2v20M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7" />,
         cooking: <><path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 1.05-1.54 5 5 0 0 1 7.08 0A5.11 5.11 0 0 1 16.59 6 4 4 0 0 1 18 13.87V21H6Z" /><line x1="6" y1="17" x2="18" y2="17" /></>,
         indoors: <><path d="M20 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v3" /><path d="M2 11v5a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" /><path d="M4 18v2" /><path d="M20 18v2" /><path d="M12 4v9" /></>,
@@ -87,8 +90,10 @@ const SectionHeader = ({ subtitle, title, iconName, rightContent, accent = LIME 
     </div>
 );
 
-const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, themeColor = LIME, inputPlaceholder, className = "" }) => {
+const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, onDelete, onEdit, themeColor = LIME, inputPlaceholder, className = "" }) => {
     const [inputValue, setInputValue] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editValue, setEditValue] = useState('');
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -125,7 +130,7 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, th
 
             <div className="flex-1 overflow-y-auto space-y-1 pr-2 custom-scrollbar min-h-[200px]">
                 {items.map(item => (
-                    <div key={item.id} className="group flex items-start gap-4 p-3 hover:bg-neutral-800/40 rounded-xl transition-colors">
+                    <div key={item.id} className="group flex items-start gap-4 p-3 hover:bg-neutral-800/40 rounded-xl transition-colors relative">
                         <button
                             onClick={() => onComplete(item)}
                             className="mt-0.5 flex-shrink-0 w-5 h-5 rounded-full border border-neutral-600 flex items-center justify-center transition-colors relative overflow-hidden"
@@ -133,7 +138,45 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, th
                             <div className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity" style={{ backgroundColor: `${themeColor}20`, borderColor: themeColor, borderWidth: '1px', borderRadius: '999px' }} />
                             <Icon name="check" size={12} className="opacity-0 group-hover:opacity-100 relative z-10" style={{ color: themeColor }} />
                         </button>
-                        <span className="text-sm text-neutral-300 leading-snug pt-0.5">{item.text}</span>
+
+                        {editingId === item.id ? (
+                            <input
+                                autoFocus
+                                type="text"
+                                value={editValue}
+                                onChange={(e) => setEditValue(e.target.value)}
+                                onBlur={() => {
+                                    if (editValue.trim() !== item.text) onEdit(item.id, editValue.trim());
+                                    setEditingId(null);
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        if (editValue.trim() !== item.text) onEdit(item.id, editValue.trim());
+                                        setEditingId(null);
+                                    }
+                                }}
+                                className="flex-1 bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-0.5"
+                            />
+                        ) : (
+                            <span
+                                onClick={() => {
+                                    setEditingId(item.id);
+                                    setEditValue(item.text);
+                                }}
+                                className="text-sm text-neutral-300 leading-snug pt-0.5 flex-1 cursor-text"
+                                title="Click to edit"
+                            >
+                                {item.text}
+                            </span>
+                        )}
+
+                        <button
+                            onClick={() => onDelete(item.id)}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-neutral-500 hover:text-red-400 transition-colors absolute right-2 top-2"
+                            title="Delete"
+                        >
+                            <Icon name="trash" size={14} />
+                        </button>
                     </div>
                 ))}
                 {items.length === 0 && (
@@ -144,17 +187,28 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, th
     );
 };
 
-const CategorySlot = ({ category, item, onAdd, onComplete }) => {
-    const [isEditing, setIsEditing] = useState(false);
-    const [inputValue, setInputValue] = useState('');
+const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) => {
+    const [isEditingNew, setIsEditingNew] = useState(false);
+    const [newInputValue, setNewInputValue] = useState('');
 
-    const handleSubmit = (e) => {
+    const [isEditingExisting, setIsEditingExisting] = useState(false);
+    const [existingInputValue, setExistingInputValue] = useState('');
+
+    const handleAddNew = (e) => {
         e.preventDefault();
-        if (inputValue.trim()) {
-            onAdd(category.id, inputValue.trim());
-            setInputValue('');
-            setIsEditing(false);
+        if (newInputValue.trim()) {
+            onAdd(category.id, newInputValue.trim());
+            setNewInputValue('');
+            setIsEditingNew(false);
         }
+    };
+
+    const handleEditExisting = (e) => {
+        e.preventDefault();
+        if (existingInputValue.trim() && existingInputValue.trim() !== item.text) {
+            onEdit(category.id, existingInputValue.trim());
+        }
+        setIsEditingExisting(false);
     };
 
     if (item) {
@@ -167,13 +221,45 @@ const CategorySlot = ({ category, item, onAdd, onComplete }) => {
                     </div>
                     <div className="w-1.5 h-1.5 rounded-full bg-[#ccff00] shadow-[0_0_8px_#ccff00]" />
                 </div>
-                <p className="text-sm text-neutral-100 font-medium leading-relaxed">{item.text}</p>
+
+                {isEditingExisting ? (
+                    <form onSubmit={handleEditExisting} className="mt-auto mb-4">
+                        <input
+                            autoFocus
+                            type="text"
+                            value={existingInputValue}
+                            onChange={(e) => setExistingInputValue(e.target.value)}
+                            onBlur={handleEditExisting}
+                            className="w-full bg-neutral-950 border border-neutral-700 rounded-lg py-2 px-3 text-sm text-neutral-200 focus:outline-none focus:border-[#ccff00]/50"
+                        />
+                    </form>
+                ) : (
+                    <p
+                        onClick={() => {
+                            setExistingInputValue(item.text);
+                            setIsEditingExisting(true);
+                        }}
+                        className="text-sm text-neutral-100 font-medium leading-relaxed cursor-text"
+                        title="Click to edit"
+                    >
+                        {item.text}
+                    </p>
+                )}
 
                 <button
                     onClick={() => onComplete(category.id, item)}
                     className="absolute bottom-4 right-4 w-8 h-8 rounded-full border border-neutral-700 bg-neutral-950 flex items-center justify-center opacity-0 group-hover:opacity-100 hover:border-[#ccff00] hover:text-[#ccff00] transition-all transform translate-y-2 group-hover:translate-y-0"
+                    title="Complete"
                 >
                     <Icon name="check" size={14} />
+                </button>
+
+                <button
+                    onClick={() => onDelete(category.id)}
+                    className="absolute top-4 right-4 w-6 h-6 rounded-md flex items-center justify-center opacity-0 group-hover:opacity-100 text-neutral-500 hover:bg-neutral-800 hover:text-red-400 transition-colors"
+                    title="Delete"
+                >
+                    <Icon name="trash" size={14} />
                 </button>
             </div>
         );
@@ -186,14 +272,14 @@ const CategorySlot = ({ category, item, onAdd, onComplete }) => {
                 <span className="text-[10px] tracking-widest font-bold text-neutral-600">{category.label}</span>
             </div>
 
-            {isEditing ? (
-                <form onSubmit={handleSubmit} className="mt-auto">
+            {isEditingNew ? (
+                <form onSubmit={handleAddNew} className="mt-auto">
                     <input
                         autoFocus
                         type="text"
-                        value={inputValue}
-                        onChange={(e) => setInputValue(e.target.value)}
-                        onBlur={() => !inputValue && setIsEditing(false)}
+                        value={newInputValue}
+                        onChange={(e) => setNewInputValue(e.target.value)}
+                        onBlur={() => !newInputValue && setIsEditingNew(false)}
                         placeholder="Type intention..."
                         className="w-full bg-neutral-900 border border-neutral-700 rounded-lg py-2 px-3 text-sm text-neutral-200 focus:outline-none focus:border-[#ccff00]/50"
                     />
@@ -204,7 +290,7 @@ const CategorySlot = ({ category, item, onAdd, onComplete }) => {
                     <div className="flex items-center justify-between">
                         <p className="text-[10px] text-neutral-600 font-serif italic">{category.sub}</p>
                         <button
-                            onClick={() => setIsEditing(true)}
+                            onClick={() => setIsEditingNew(true)}
                             className="w-6 h-6 rounded-md bg-neutral-900 hover:bg-neutral-800 flex items-center justify-center text-neutral-400 hover:text-[#ccff00] transition-colors"
                         >
                             <Icon name="plus" size={14} />
@@ -216,11 +302,105 @@ const CategorySlot = ({ category, item, onAdd, onComplete }) => {
     );
 };
 
+const MoviesVault = ({ movies, onAdd, onToggle, onDelete, onEdit }) => {
+    const [inputValue, setInputValue] = useState('');
+    const [editingId, setEditingId] = useState(null);
+    const [editValue, setEditValue] = useState('');
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        if (inputValue.trim()) {
+            onAdd(inputValue.trim());
+            setInputValue('');
+        }
+    };
+
+    return (
+        <div className="bg-[#111111]/80 backdrop-blur-xl border border-[#a5b4fc]/20 rounded-3xl p-8 mb-20 shadow-[0_10px_40px_-20px_#a5b4fc20]">
+            <SectionHeader title="Movies Vault" subtitle="SHARED WATCHLIST" iconName="film" accent="#a5b4fc" />
+
+            <form onSubmit={handleSubmit} className="relative mb-6">
+                <input
+                    type="text"
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    placeholder="Add a movie or show..."
+                    className="w-full bg-neutral-950/50 border border-neutral-800 rounded-xl py-3 pl-4 pr-12 text-sm text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-[#a5b4fc]/40 transition-colors"
+                />
+                <button
+                    type="submit"
+                    disabled={!inputValue.trim()}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 text-black bg-[#a5b4fc] rounded-lg flex items-center justify-center disabled:bg-neutral-800 disabled:opacity-30 hover:scale-105 transition-transform"
+                >
+                    <Icon name="plus" size={18} />
+                </button>
+            </form>
+
+            <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
+                {movies.map(movie => (
+                    <div key={movie.id} className={`group flex items-start gap-4 p-3 rounded-xl transition-colors relative ${movie.watched ? 'bg-neutral-900/40 opacity-50' : 'hover:bg-neutral-800/40'}`}>
+                        <button
+                            onClick={() => onToggle(movie)}
+                            className={`mt-0.5 flex-shrink-0 w-5 h-5 rounded border flex items-center justify-center transition-colors relative overflow-hidden ${movie.watched ? 'border-[#a5b4fc]' : 'border-neutral-600'}`}
+                        >
+                            <div className={`absolute inset-0 transition-opacity ${movie.watched ? 'opacity-100 bg-[#a5b4fc]' : 'opacity-0 group-hover:opacity-100 bg-[#a5b4fc]/20'}`} />
+                            <Icon name="check" size={12} className={`relative z-10 transition-opacity ${movie.watched ? 'text-black opacity-100' : 'text-[#a5b4fc] opacity-0 group-hover:opacity-100'}`} />
+                        </button>
+
+                        {editingId === movie.id ? (
+                            <input
+                                autoFocus
+                                type="text"
+                                value={editValue}
+                                onChange={(e) => setEditValue(e.target.value)}
+                                onBlur={() => {
+                                    if (editValue.trim() !== movie.title) onEdit(movie.id, editValue.trim());
+                                    setEditingId(null);
+                                }}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        if (editValue.trim() !== movie.title) onEdit(movie.id, editValue.trim());
+                                        setEditingId(null);
+                                    }
+                                }}
+                                className="flex-1 bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-0.5"
+                            />
+                        ) : (
+                            <span
+                                onClick={() => {
+                                    setEditingId(movie.id);
+                                    setEditValue(movie.title);
+                                }}
+                                className={`text-sm leading-snug pt-0.5 flex-1 cursor-text transition-all ${movie.watched ? 'text-neutral-500 line-through' : 'text-neutral-300'}`}
+                                title="Click to edit"
+                            >
+                                {movie.title}
+                            </span>
+                        )}
+
+                        <button
+                            onClick={() => onDelete(movie.id)}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-neutral-500 hover:text-red-400 transition-colors absolute right-2 top-2"
+                            title="Delete"
+                        >
+                            <Icon name="trash" size={14} />
+                        </button>
+                    </div>
+                ))}
+                {movies.length === 0 && (
+                    <div className="text-sm text-neutral-600 italic text-center mt-6 mb-6">No movies or shows added yet.</div>
+                )}
+            </div>
+        </div>
+    );
+};
+
 export default function VisionBoard() {
     const [user, setUser] = useState(null);
     const [ankItems, setAnkItems] = useState([]);
     const [amyItems, setAmyItems] = useState([]);
     const [sharedItems, setSharedItems] = useState({});
+    const [movies, setMovies] = useState([]);
     const [archivedItems, setArchivedItems] = useState([]);
     const [ideaVault, setIdeaVault] = useState([]);
     const [isVaultOpen, setIsVaultOpen] = useState(false);
@@ -263,6 +443,16 @@ export default function VisionBoard() {
             setAmyItems(items);
         }, console.error);
 
+        const unsubMovies = onSnapshot(getColRef('movies'), (snap) => {
+            const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            // Sort unwatched to the top, then sort by newest added
+            items.sort((a, b) => {
+                if (a.watched === b.watched) return (b.createdAt || 0) - (a.createdAt || 0);
+                return a.watched ? 1 : -1;
+            });
+            setMovies(items);
+        }, console.error);
+
         const unsubShared = onSnapshot(getColRef('sharedItems'), (snap) => {
             const items = {};
             snap.docs.forEach(doc => {
@@ -286,6 +476,7 @@ export default function VisionBoard() {
         return () => {
             unsubAnk();
             unsubAmy();
+            unsubMovies();
             unsubShared();
             unsubArchive();
             unsubVault();
@@ -321,6 +512,28 @@ export default function VisionBoard() {
         });
     };
 
+    const handleDeletePersonal = async (board, itemId) => {
+        if (!user) return;
+        const colName = board === 'ank' ? 'ankItems' : 'amyItems';
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', colName, itemId));
+    };
+
+    const handleEditPersonal = async (board, itemId, newText) => {
+        if (!user) return;
+        const colName = board === 'ank' ? 'ankItems' : 'amyItems';
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', colName, itemId), { text: newText });
+    };
+
+    const handleDeleteShared = async (categoryId) => {
+        if (!user) return;
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', categoryId));
+    };
+
+    const handleEditShared = async (categoryId, newText) => {
+        if (!user) return;
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', categoryId), { text: newText });
+    };
+
     const handleAddShared = async (categoryId, text) => {
         if (!user) return;
         await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', categoryId), {
@@ -333,45 +546,106 @@ export default function VisionBoard() {
     const handleCompleteShared = async (categoryId, item) => {
         if (!user) return;
 
-        // Remove from shared board slot
+        // Remove from shared board
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', categoryId));
 
         // Add to archive
-        const categoryLabel = CATEGORIES.find(c => c.id === categoryId).label;
         const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
+        const category = CATEGORIES.find(c => c.id === categoryId);
         await addDoc(getColRef('archivedItems'), {
             text: item.text,
-            category: categoryLabel,
+            category: category ? category.label : 'SHARED',
             date: dateStr,
             source: 'shared',
             createdAt: Date.now()
         });
     };
 
-    const handleVaultAdd = async (text) => {
+    const handleAddMovie = async (title) => {
         if (!user) return;
-        await addDoc(getColRef('ideaVault'), { text, createdAt: Date.now() });
+        await addDoc(getColRef('movies'), {
+            title,
+            watched: false,
+            createdAt: Date.now()
+        });
     };
 
-    const handleAddFromVault = async (vaultItem, targetBoard, categoryId = null) => {
+    const handleToggleMovie = async (item) => {
+        if (!user) return;
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', item.id), {
+            watched: !item.watched
+        });
+    };
+
+    const handleDeleteMovie = async (id) => {
+        if (!user) return;
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', id));
+    };
+
+    const handleEditMovie = async (id, newTitle) => {
+        if (!user) return;
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', id), { title: newTitle });
+    };
+
+    const handleVaultAdd = async (text) => {
+        if (!user) return;
+        await addDoc(getColRef('ideaVault'), {
+            text,
+            createdAt: Date.now()
+        });
+    };
+
+    const handleAddFromVault = async (item, destination, categoryId = null) => {
         if (!user) return;
 
-        if (targetBoard === 'ank' || targetBoard === 'amy') {
-            const colName = targetBoard === 'ank' ? 'ankItems' : 'amyItems';
+        if (destination === 'ank' || destination === 'amy') {
+            const colName = destination === 'ank' ? 'ankItems' : 'amyItems';
             await addDoc(getColRef(colName), {
-                text: vaultItem.text,
+                text: item.text,
                 date: new Date().toISOString(),
                 createdAt: Date.now()
             });
-        } else if (targetBoard === 'shared' && categoryId) {
+        } else if (destination === 'shared' && categoryId) {
             await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', categoryId), {
-                text: vaultItem.text,
+                text: item.text,
                 date: new Date().toISOString(),
                 createdAt: Date.now()
             });
         }
 
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ideaVault', vaultItem.id));
+        // Remove from vault
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ideaVault', item.id));
+    };
+
+    const handleRestore = async (item) => {
+        if (!user) return;
+
+        if (item.source === 'ank' || item.source === 'amy') {
+            const colName = item.source === 'ank' ? 'ankItems' : 'amyItems';
+            await addDoc(getColRef(colName), {
+                text: item.text,
+                date: new Date().toISOString(),
+                createdAt: item.createdAt || Date.now()
+            });
+        } else if (item.source === 'shared') {
+            const category = CATEGORIES.find(c => c.label === item.category);
+            if (category) {
+                if (sharedItems[category.id]) {
+                    // If the slot is currently occupied, stash the restored item in the Idea Vault
+                    await addDoc(getColRef('ideaVault'), { text: item.text, createdAt: Date.now() });
+                } else {
+                    // If the slot is open, drop it right back in
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', category.id), {
+                        text: item.text,
+                        date: new Date().toISOString(),
+                        createdAt: item.createdAt || Date.now()
+                    });
+                }
+            }
+        }
+
+        // Remove from the Archive Hall of Fame
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', item.id));
     };
 
     const groupedArchive = archivedItems.reduce((acc, item) => {
@@ -459,6 +733,8 @@ export default function VisionBoard() {
                         items={ankItems}
                         onAdd={(text) => handleAddPersonal('ank', text)}
                         onComplete={(item) => handleCompletePersonal('ank', item)}
+                        onDelete={(itemId) => handleDeletePersonal('ank', itemId)}
+                        onEdit={(itemId, newText) => handleEditPersonal('ank', itemId, newText)}
                     />
 
                     {/* Center Column: Shared Universe - Forced to order-1 on Mobile */}
@@ -499,6 +775,8 @@ export default function VisionBoard() {
                                             item={item}
                                             onAdd={handleAddShared}
                                             onComplete={handleCompleteShared}
+                                            onDelete={handleDeleteShared}
+                                            onEdit={handleEditShared}
                                         />
                                     );
                                 })}
@@ -517,8 +795,18 @@ export default function VisionBoard() {
                         items={amyItems}
                         onAdd={(text) => handleAddPersonal('amy', text)}
                         onComplete={(item) => handleCompletePersonal('amy', item)}
+                        onDelete={(itemId) => handleDeletePersonal('amy', itemId)}
+                        onEdit={(itemId, newText) => handleEditPersonal('amy', itemId, newText)}
                     />
                 </div>
+
+                <MoviesVault
+                    movies={movies}
+                    onAdd={handleAddMovie}
+                    onToggle={handleToggleMovie}
+                    onDelete={handleDeleteMovie}
+                    onEdit={handleEditMovie}
+                />
 
                 {/* The Archive / Hall of Fame */}
                 <div className="bg-[#111]/80 border border-neutral-800 rounded-3xl p-10 relative overflow-hidden shadow-2xl">
@@ -551,7 +839,7 @@ export default function VisionBoard() {
                                     </div>
                                     <div className="space-y-4">
                                         {items.map(item => (
-                                            <div key={item.id} className="flex flex-col gap-1 pb-4 border-b border-neutral-800/50 last:border-0">
+                                            <div key={item.id} className="flex flex-col gap-1 pb-4 border-b border-neutral-800/50 last:border-0 group">
                                                 <div className="flex items-start justify-between gap-4">
                                                     <div className="flex items-start gap-3">
                                                         <div className="mt-1 w-4 h-4 rounded-full border border-[#88aaff]/50 flex items-center justify-center flex-shrink-0">
@@ -559,7 +847,16 @@ export default function VisionBoard() {
                                                         </div>
                                                         <span className="text-sm text-neutral-200">{item.text}</span>
                                                     </div>
-                                                    <span className="text-[10px] font-mono text-neutral-600 flex-shrink-0 pt-1">{item.date}</span>
+                                                    <div className="flex items-center gap-3">
+                                                        <button
+                                                            onClick={() => handleRestore(item)}
+                                                            title="Restore to board"
+                                                            className="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-white transition-colors"
+                                                        >
+                                                            <Icon name="undo" size={14} />
+                                                        </button>
+                                                        <span className="text-[10px] font-mono text-neutral-600 flex-shrink-0 pt-1">{item.date}</span>
+                                                    </div>
                                                 </div>
                                             </div>
                                         ))}
