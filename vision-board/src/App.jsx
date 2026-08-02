@@ -1,6 +1,35 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc } from 'firebase/firestore';
 
-// Inlining SVGs so this file works flawlessly without needing to install lucide-react
+// Safely loading your specific Firebase configuration
+let fbConfig;
+try {
+    fbConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+        apiKey: "AIzaSyDL9UoEEP3S-iX4hqTOwxwsWy2zVunxBjY",
+        authDomain: "ank-and-amy.firebaseapp.com",
+        projectId: "ank-and-amy",
+        storageBucket: "ank-and-amy.firebasestorage.app",
+        messagingSenderId: "4040638043",
+        appId: "1:4040638043:web:6a21055be91528a538497e"
+    };
+} catch (e) {
+    fbConfig = {
+        apiKey: "AIzaSyDL9UoEEP3S-iX4hqTOwxwsWy2zVunxBjY",
+        authDomain: "ank-and-amy.firebaseapp.com",
+        projectId: "ank-and-amy",
+        storageBucket: "ank-and-amy.firebasestorage.app",
+        messagingSenderId: "4040638043",
+        appId: "1:4040638043:web:6a21055be91528a538497e"
+    };
+}
+
+const app = initializeApp(fbConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'ank-and-amy-app';
+
 const Icon = ({ name, size = 16, className = "", style = {} }) => {
     const icons = {
         sparkles: <path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z" />,
@@ -9,7 +38,6 @@ const Icon = ({ name, size = 16, className = "", style = {} }) => {
         check: <polyline points="20 6 9 17 4 12" />,
         plus: <><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></>,
         x: <><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></>,
-        archive: <><polyline points="21 8 21 21 3 21 3 8" /><rect x="1" y="3" width="22" height="5" /><line x1="10" y1="12" x2="14" y2="12" /></>,
         lock: <><rect x="3" y="11" width="18" height="11" rx="2" ry="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>,
         arrowRight: <><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></>,
         dining: <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2M7 2v20M21 15V2v0a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7" />,
@@ -82,7 +110,7 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, th
                     type="text"
                     value={inputValue}
                     onChange={(e) => setInputValue(e.target.value)}
-                    placeholder={inputPlaceholder || `Add a small thing to ${title}...`}
+                    placeholder={inputPlaceholder}
                     className="w-full bg-neutral-950/50 border border-neutral-800 rounded-xl py-3 pl-4 pr-12 text-sm text-neutral-200 placeholder-neutral-500 focus:outline-none focus:border-white/20 transition-colors"
                 />
                 <button
@@ -111,10 +139,6 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, th
                 {items.length === 0 && (
                     <div className="text-sm text-neutral-600 italic text-center mt-10">No active dreams yet.</div>
                 )}
-            </div>
-
-            <div className="mt-4 pt-4 border-t border-neutral-800/50 flex justify-center">
-                <span className="text-[10px] tracking-widest text-neutral-500 uppercase">{items.length} Live Intentions</span>
             </div>
         </div>
     );
@@ -193,76 +217,163 @@ const CategorySlot = ({ category, item, onAdd, onComplete }) => {
 };
 
 export default function VisionBoard() {
-    // Application State
-    const [ankItems, setAnkItems] = useState([
-        { id: 'ank1', text: 'Find a tiny turntable for the kitchen', date: new Date().toISOString() },
-        { id: 'ank2', text: 'Pick a trail for the first cool weekend', date: new Date().toISOString() }
-    ]);
-    const [amyItems, setAmyItems] = useState([
-        { id: 'amy1', text: 'Choose the colour for the reading corner', date: new Date().toISOString() },
-        { id: 'amy2', text: 'Find a museum night with a late opening', date: new Date().toISOString() }
-    ]);
-    const [sharedItems, setSharedItems] = useState({
-        'dining': { id: 's1', text: 'Thai food on saturday', date: new Date().toISOString() },
-        'cooking': { id: 's2', text: 'Bake the citrus olive-oil cake', date: new Date().toISOString() },
-        'indoors': { id: 's3', text: 'Autumn double feature + the good blanket', date: new Date().toISOString() },
-        'travel': { id: 's4', text: 'Two unhurried days in Montréal', date: new Date().toISOString() },
-        'culture': { id: 's5', text: 'A Saturday gallery crawl', date: new Date().toISOString() }
-    });
-
-    const [archivedItems, setArchivedItems] = useState([
-        { id: 'a1', text: 'Late supper at the tiny ramen bar', category: 'DINING', date: 'JUL 28', source: 'shared' },
-        { id: 'a2', text: 'Swim before breakfast, once', category: 'OUTDOORS', date: 'JUL 28', source: 'shared' },
-        { id: 'a3', text: 'Learn the lemon pasta properly', category: 'ANK\'S TIDES', date: 'AUG 1', source: 'ank' }
-    ]);
-
-    const [ideaVault, setIdeaVault] = useState([
-        { id: 'v1', text: 'Buy tickets for the jazz festival' }
-    ]);
+    const [user, setUser] = useState(null);
+    const [ankItems, setAnkItems] = useState([]);
+    const [amyItems, setAmyItems] = useState([]);
+    const [sharedItems, setSharedItems] = useState({});
+    const [archivedItems, setArchivedItems] = useState([]);
+    const [ideaVault, setIdeaVault] = useState([]);
     const [isVaultOpen, setIsVaultOpen] = useState(false);
 
-    const sharedCount = Object.keys(sharedItems).length;
+    // Helper for strictly scoped artifact paths
+    const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
 
-    const handleAddPersonal = (board, text) => {
-        const newItem = { id: Date.now().toString(), text, date: new Date().toISOString() };
-        if (board === 'ank') setAnkItems([...ankItems, newItem]);
-        else setAmyItems([...amyItems, newItem]);
-    };
+    // 1. Authenticate Once
+    useEffect(() => {
+        const initAuth = async () => {
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Firebase Auth Error:", error);
+            }
+        };
+        initAuth();
 
-    const handleCompletePersonal = (board, item) => {
-        if (board === 'ank') setAnkItems(ankItems.filter(i => i.id !== item.id));
-        else setAmyItems(amyItems.filter(i => i.id !== item.id));
+        const unsubscribe = onAuthStateChanged(auth, setUser);
+        return () => unsubscribe();
+    }, []);
 
-        const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
-        const categoryName = board === 'ank' ? "ANK'S TIDES" : "AMY'S DAWNS";
-        setArchivedItems([{ ...item, category: categoryName, date: dateStr, source: board }, ...archivedItems]);
-    };
+    // 2. Fetch Data when Authenticated
+    useEffect(() => {
+        if (!user) return;
 
-    const handleAddShared = (categoryId, text) => {
-        setSharedItems({
-            ...sharedItems,
-            [categoryId]: { id: Date.now().toString(), text, date: new Date().toISOString() }
+        const unsubAnk = onSnapshot(getColRef('ankItems'), (snap) => {
+            const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            items.sort((a, b) => a.createdAt - b.createdAt); // Sort in memory (Rule 2)
+            setAnkItems(items);
+        }, console.error);
+
+        const unsubAmy = onSnapshot(getColRef('amyItems'), (snap) => {
+            const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            items.sort((a, b) => a.createdAt - b.createdAt);
+            setAmyItems(items);
+        }, console.error);
+
+        const unsubShared = onSnapshot(getColRef('sharedItems'), (snap) => {
+            const items = {};
+            snap.docs.forEach(doc => {
+                items[doc.id] = { id: doc.id, ...doc.data() };
+            });
+            setSharedItems(items);
+        }, console.error);
+
+        const unsubArchive = onSnapshot(getColRef('archivedItems'), (snap) => {
+            const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            items.sort((a, b) => b.createdAt - a.createdAt); // Newest first
+            setArchivedItems(items);
+        }, console.error);
+
+        const unsubVault = onSnapshot(getColRef('ideaVault'), (snap) => {
+            const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            items.sort((a, b) => a.createdAt - b.createdAt);
+            setIdeaVault(items);
+        }, console.error);
+
+        return () => {
+            unsubAnk();
+            unsubAmy();
+            unsubShared();
+            unsubArchive();
+            unsubVault();
+        };
+    }, [user]);
+
+    const handleAddPersonal = async (board, text) => {
+        if (!user) return;
+        const colName = board === 'ank' ? 'ankItems' : 'amyItems';
+        await addDoc(getColRef(colName), {
+            text,
+            date: new Date().toISOString(),
+            createdAt: Date.now()
         });
     };
 
-    const handleCompleteShared = (categoryId, item) => {
-        const newShared = { ...sharedItems };
-        delete newShared[categoryId];
-        setSharedItems(newShared);
+    const handleCompletePersonal = async (board, item) => {
+        if (!user) return;
+        const colName = board === 'ank' ? 'ankItems' : 'amyItems';
 
+        // Remove from personal board
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', colName, item.id));
+
+        // Add to archive
+        const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
+        const categoryName = board === 'ank' ? "Ank's Orbit" : "Amy's Orbit";
+        await addDoc(getColRef('archivedItems'), {
+            text: item.text,
+            category: categoryName,
+            date: dateStr,
+            source: board,
+            createdAt: Date.now()
+        });
+    };
+
+    const handleAddShared = async (categoryId, text) => {
+        if (!user) return;
+        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', categoryId), {
+            text,
+            date: new Date().toISOString(),
+            createdAt: Date.now()
+        });
+    };
+
+    const handleCompleteShared = async (categoryId, item) => {
+        if (!user) return;
+
+        // Remove from shared board slot
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', categoryId));
+
+        // Add to archive
         const categoryLabel = CATEGORIES.find(c => c.id === categoryId).label;
         const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase();
-        setArchivedItems([{ ...item, category: categoryLabel, date: dateStr, source: 'shared' }, ...archivedItems]);
+        await addDoc(getColRef('archivedItems'), {
+            text: item.text,
+            category: categoryLabel,
+            date: dateStr,
+            source: 'shared',
+            createdAt: Date.now()
+        });
     };
 
-    const handleAddFromVault = (vaultItem, targetBoard, categoryId = null) => {
-        if (targetBoard === 'ank') handleAddPersonal('ank', vaultItem.text);
-        else if (targetBoard === 'amy') handleAddPersonal('amy', vaultItem.text);
-        else if (targetBoard === 'shared' && categoryId) handleAddShared(categoryId, vaultItem.text);
-
-        setIdeaVault(ideaVault.filter(i => i.id !== vaultItem.id));
+    const handleVaultAdd = async (text) => {
+        if (!user) return;
+        await addDoc(getColRef('ideaVault'), { text, createdAt: Date.now() });
     };
-    // Group Archive by Category
+
+    const handleAddFromVault = async (vaultItem, targetBoard, categoryId = null) => {
+        if (!user) return;
+
+        if (targetBoard === 'ank' || targetBoard === 'amy') {
+            const colName = targetBoard === 'ank' ? 'ankItems' : 'amyItems';
+            await addDoc(getColRef(colName), {
+                text: vaultItem.text,
+                date: new Date().toISOString(),
+                createdAt: Date.now()
+            });
+        } else if (targetBoard === 'shared' && categoryId) {
+            await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', categoryId), {
+                text: vaultItem.text,
+                date: new Date().toISOString(),
+                createdAt: Date.now()
+            });
+        }
+
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ideaVault', vaultItem.id));
+    };
+
     const groupedArchive = archivedItems.reduce((acc, item) => {
         if (!acc[item.category]) acc[item.category] = [];
         acc[item.category].push(item);
@@ -277,28 +388,25 @@ export default function VisionBoard() {
         @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;1,400;1,600&display=swap');
         .font-serif { font-family: 'Playfair Display', serif !important; }
         .font-sans { font-family: 'Outfit', sans-serif !important; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
       `}</style>
 
+            {/* Thematic Eclipse Background */}
             <div className="fixed inset-0 z-0 pointer-events-none overflow-hidden bg-[#0a0a0a]">
-                {/* 1. The Actual Image (Solar Eclipse - Sun & Moon overlapping) */}
                 <img
                     src="https://images.unsplash.com/photo-1481819613568-3701cbc70156?q=80&w=2000&auto=format&fit=crop"
-                    alt="Cosmic eclipse background"
-                    className="absolute inset-0 w-full h-full object-cover opacity-50"
+                    alt="Solar Eclipse"
+                    className="absolute inset-0 w-full h-full object-cover opacity-80"
                 />
-
-                {/* 2. The "Blurry Thingy" on Top (Frosted glass overlay) */}
-                <div className="absolute inset-0 backdrop-blur-[24px] bg-[#0a0a0a]/40" />
-
-                {/* 3. Thematic Ambient Glows (Sun on right, Moon on left) */}
-                <div className="absolute top-[-20%] right-[-10%] w-[60vw] h-[60vw] bg-[#fbbf24]/15 rounded-full blur-[120px] mix-blend-screen" />
-                <div className="absolute bottom-[-20%] left-[-10%] w-[60vw] h-[60vw] bg-[#a5b4fc]/15 rounded-full blur-[120px] mix-blend-screen" />
-
-                {/* 4. Dark gradient overlay to ensure text contrast at the top and bottom */}
-                <div className="absolute inset-0 bg-gradient-to-b from-[#0a0a0a]/90 via-transparent to-[#0a0a0a]/90" />
+                <div className="absolute inset-0 backdrop-blur-[24px] bg-[#0a0a0a]/50" />
+                <div className="absolute top-[-20%] right-[-10%] w-[60vw] h-[60vw] bg-[#fbbf24]/10 rounded-full blur-[120px] mix-blend-screen" />
+                <div className="absolute bottom-[-20%] left-[-10%] w-[60vw] h-[60vw] bg-[#a5b4fc]/10 rounded-full blur-[120px] mix-blend-screen" />
+                <div className="absolute inset-0 bg-gradient-to-b from-[#0a0a0a]/90 via-transparent to-[#0a0a0a]/95" />
             </div>
 
-            {/* Top Navigation */}
+            {/* Top Navigation - Cleaned Up */}
             <nav className="border-b border-white/5 bg-[#0a0a0a]/40 backdrop-blur-2xl sticky top-0 z-50">
                 <div className="max-w-[1600px] mx-auto px-6 h-16 flex items-center justify-between">
                     <div className="flex items-center gap-4">
@@ -319,34 +427,32 @@ export default function VisionBoard() {
                         >
                             <Icon name="sparkles" size={14} className="text-[#ccff00]" />
                             Idea Vault
-                            <span className="bg-neutral-800 text-neutral-400 px-1.5 py-0.5 rounded text-[10px] ml-1">{ideaVault.length}</span>
+                            {ideaVault.length > 0 && <span className="bg-neutral-800 text-neutral-400 px-1.5 py-0.5 rounded text-[10px] ml-1">{ideaVault.length}</span>}
                         </button>
                     </div>
                 </div>
             </nav>
 
             <main className="max-w-[1600px] w-full mx-auto px-6 py-12 relative z-10">
+
                 {/* Hero Section */}
-                <div className="flex flex-col md:flex-row md:items-end justify-between gap-8 mb-16">
-                    <div>
-                        <p className="text-[10px] tracking-[0.2em] font-semibold text-[#a5b4fc] mb-4 uppercase">Ank & Amy • The Sun and The Moon</p>
-                        <h1 className="text-5xl md:text-6xl lg:text-7xl font-serif tracking-tight text-white leading-[1.1]">
-                            Two people, <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#a5b4fc] via-[#f4f4f5] to-[#fbbf24]">one unfolding<br />universe.</span>
-                        </h1>
-                    </div>
-                    <div className="max-w-xs text-sm text-neutral-400 leading-relaxed md:text-right pb-2 font-serif italic">
-                        "The sun dreams of tomorrow. The moon remembers yesterday. Together, we build today."
-                    </div>
+                <div className="flex flex-col mb-16 max-w-4xl">
+                    <h1 className="text-5xl md:text-6xl lg:text-7xl font-serif tracking-tight text-white leading-[1.1] mb-6">
+                        Two people, <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#a5b4fc] via-[#f4f4f5] to-[#fbbf24]">one unfolding<br />universe.</span>
+                    </h1>
+                    <p className="text-lg md:text-xl text-neutral-300 font-serif italic max-w-2xl leading-relaxed border-l-2 border-[#ccff00]/40 pl-6">
+                        The sun dreams of tomorrow. The moon remembers yesterday.<br />Together, we build today.
+                    </p>
                 </div>
 
-                {/* 3-Column Board Layout */}
+                {/* 3-Column Board Layout - Mobile Optimized Ordering */}
                 <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr_280px] xl:grid-cols-[320px_1fr_320px] gap-6 items-stretch mb-20">
 
-                    {/* Left Column: Ank's baord */}
+                    {/* Left Column: Ank's Orbit */}
                     <PersonalBoard
                         className="order-2 lg:order-1"
-                        title="Ank's Space"
-                        subtitle="GUIDED BY HER LIGHT"
+                        title="Ank's Orbit"
+                        subtitle="ILLUMINATED BY HER LIGHT"
                         inputPlaceholder="What can Amy help you achieve?"
                         iconName="moon"
                         themeColor="#a5b4fc"
@@ -355,37 +461,29 @@ export default function VisionBoard() {
                         onComplete={(item) => handleCompletePersonal('ank', item)}
                     />
 
-                    {/* Center Column: Shared Universe */}
+                    {/* Center Column: Shared Universe - Forced to order-1 on Mobile */}
                     <div className="order-1 lg:order-2 bg-[#161816]/80 backdrop-blur-xl border border-[#ccff00]/20 rounded-3xl p-8 shadow-[0_10px_40px_-20px_#ccff0050] flex flex-col relative overflow-hidden transition-all duration-500 hover:-translate-y-1">
-                        {/* Subtle stars background */}
                         <div className="absolute inset-0 opacity-20 pointer-events-none" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '32px 32px' }}></div>
 
                         <div className="relative z-10 h-full flex flex-col">
                             <SectionHeader
-                                title={<>The chapters we write together.</>}
-                                subtitle={<>THE SHARED HORIZON</> }
+                                title={<>Where our<br />orbits meet.</>}
+                                subtitle="THE CENTER OF GRAVITY"
                                 iconName="sparkles"
-                                rightContent={
-                                    <div className="text-right">
-                                        <div className="text-[10px] tracking-widest text-neutral-500 uppercase mb-1">Shared Capacity</div>
-                                        <div className="text-sm font-mono"><span className="text-[#ccff00]">{sharedCount}</span> / 8 held</div>
-                                    </div>
-                                }
                             />
 
-                            {/* 3x3 Grid */}
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 flex-1 mt-4">
                                 {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((index) => {
-                                    // The Center Tile
+                                    // Center Graphic
                                     if (index === 4) {
                                         return (
                                             <div key="center" className="bg-neutral-950/50 border border-[#ccff00]/30 rounded-xl p-6 flex flex-col items-center justify-center text-center relative overflow-hidden hidden lg:flex">
                                                 <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-[#ccff00]/5 via-transparent to-transparent opacity-50" />
-                                                <span className="text-[10px] tracking-[0.2em] font-bold text-neutral-500 mb-3 z-10">CURRENT ORBIT</span>
+                                                <span className="text-[10px] tracking-[0.2em] font-bold text-neutral-500 mb-3 z-10">OUR UNIVERSE</span>
                                                 <h3 className="text-2xl font-serif text-[#ccff00] italic leading-tight mb-4 z-10">
-                                                    All the places<br />the next story<br />could begin.
+                                                    Together,<br />we build<br />today.
                                                 </h3>
-                                                <span className="text-[10px] tracking-widest text-[#ccff00]/70 uppercase z-10">Two Paths / One Center</span>
+                                                <span className="text-[10px] tracking-widest text-[#ccff00]/70 uppercase z-10">Right here, right now</span>
                                             </div>
                                         );
                                     }
@@ -405,17 +503,13 @@ export default function VisionBoard() {
                                     );
                                 })}
                             </div>
-
-                            <div className="mt-6 flex items-center justify-between border-t border-neutral-800/50 pt-6">
-                                <span className="text-[10px] tracking-widest text-neutral-600 uppercase">Only eight kinds of good thing</span>
-                            </div>
                         </div>
                     </div>
 
-                    {/* Right Column: Amy's board */}
+                    {/* Right Column: Amy's Ascent */}
                     <PersonalBoard
                         className="order-3 lg:order-3"
-                        title="Amy's Space"
+                        title="Amy's Orbit"
                         subtitle="ANCHORED BY HIS GRAVITY"
                         inputPlaceholder="What can Ank help you achieve?"
                         iconName="sun"
@@ -424,22 +518,6 @@ export default function VisionBoard() {
                         onAdd={(text) => handleAddPersonal('amy', text)}
                         onComplete={(item) => handleCompletePersonal('amy', item)}
                     />
-                </div>
-
-                {/* Info Bar above Archive */}
-                <div className="flex items-center justify-end mb-8 px-2">
-                    <button
-                        onClick={() => setIsVaultOpen(true)}
-                        className="flex items-center gap-4 bg-neutral-900 border border-neutral-800 rounded-lg px-4 py-2 hover:bg-neutral-800 transition-colors shadow-lg"
-                    >
-                        <div className="text-right hidden sm:block">
-                            <div className="text-[9px] tracking-widest text-neutral-500 uppercase mb-0.5">Temporary Field</div>
-                            <div className="text-sm font-medium">Open the Idea Vault</div>
-                        </div>
-                        <div className="w-8 h-8 rounded-full bg-neutral-800 border border-neutral-700 flex items-center justify-center text-[#ccff00]">
-                            <Icon name="sparkles" size={14} />
-                        </div>
-                    </button>
                 </div>
 
                 {/* The Archive / Hall of Fame */}
@@ -514,7 +592,7 @@ export default function VisionBoard() {
                                     e.preventDefault();
                                     const val = e.target.elements.idea.value.trim();
                                     if (val) {
-                                        setIdeaVault([...ideaVault, { id: Date.now().toString(), text: val }]);
+                                        handleVaultAdd(val);
                                         e.target.reset();
                                     }
                                 }}
