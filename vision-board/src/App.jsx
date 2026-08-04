@@ -50,7 +50,9 @@ const Icon = ({ name, size = 16, className = "", style = {} }) => {
         events: <><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" /><path d="M13 5v2" /><path d="M13 17v2" /><path d="M13 11v2" /></>,
         travel: <path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21.5 4c0 0-2-.5-3.5 1.5L14.5 9 6.2 7.2c-.8-.2-1.6.2-2 .9L3 9.6l5.5 3.5L5 16.5l-3.2-.8-1.3 1.3 4.5 2 2 4.5 1.3-1.3-.8-3.2 3.4-3.5 3.5 5.5 1.5-1.2c.7-.4 1.1-1.2.9-2Z" />,
         deep_dives: <><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" /><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" /></>,
-        culture: <><path d="M12 3 2 7l10 4 10-4-10-4Z" /><path d="M6 11v5" /><path d="M10 11v5" /><path d="M14 11v5" /><path d="M18 11v5" /><path d="M4 16h16" /><path d="M4 21h16" /></>
+        culture: <><path d="M12 3 2 7l10 4 10-4-10-4Z" /><path d="M6 11v5" /><path d="M10 11v5" /><path d="M14 11v5" /><path d="M18 11v5" /><path d="M4 16h16" /><path d="M4 21h16" /></>,
+        star: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />,
+        starFilled: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" fill="currentColor" stroke="none" />
     };
 
     return (
@@ -302,10 +304,126 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
     );
 };
 
-const MoviesVault = ({ movies, onAdd, onToggle, onDelete, onEdit }) => {
-    const [inputValue, setInputValue] = useState('');
+const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
     const [editingId, setEditingId] = useState(null);
     const [editValue, setEditValue] = useState('');
+
+    const [hoverRating, setHoverRating] = useState(0);
+    const [isEditingComment, setIsEditingComment] = useState(false);
+    const [comment, setComment] = useState(movie.comment || '');
+
+    useEffect(() => {
+        setComment(movie.comment || '');
+    }, [movie.comment]);
+
+    const handleSaveComment = (e) => {
+        if (e) e.preventDefault();
+        if (comment.trim() !== (movie.comment || '')) {
+            onUpdate(movie.id, { comment: comment.trim() });
+        }
+        setIsEditingComment(false);
+    };
+
+    return (
+        <div className={`flex flex-col gap-1 p-3 rounded-xl transition-colors relative group ${movie.watched ? 'bg-neutral-900/30' : 'hover:bg-neutral-800/40'}`}>
+            <div className="flex items-start gap-4 relative">
+                <button
+                    onClick={() => onToggle(movie)}
+                    className={`mt-0.5 flex-shrink-0 w-5 h-5 rounded border flex items-center justify-center transition-colors relative overflow-hidden ${movie.watched ? 'border-[#a5b4fc]' : 'border-neutral-600'}`}
+                >
+                    <div className={`absolute inset-0 transition-opacity ${movie.watched ? 'opacity-100 bg-[#a5b4fc]' : 'opacity-0 group-hover:opacity-100 bg-[#a5b4fc]/20'}`} />
+                    <Icon name="check" size={12} className={`relative z-10 transition-opacity ${movie.watched ? 'text-black opacity-100' : 'text-[#a5b4fc] opacity-0 group-hover:opacity-100'}`} />
+                </button>
+
+                {editingId === movie.id ? (
+                    <input
+                        autoFocus
+                        type="text"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onBlur={() => {
+                            if (editValue.trim() !== movie.title) onEdit(movie.id, editValue.trim());
+                            setEditingId(null);
+                        }}
+                        onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                                if (editValue.trim() !== movie.title) onEdit(movie.id, editValue.trim());
+                                setEditingId(null);
+                            }
+                        }}
+                        className="flex-1 bg-transparent border-b border-[#a5b4fc]/50 text-sm text-neutral-200 outline-none pb-0.5"
+                    />
+                ) : (
+                    <span
+                        onClick={() => {
+                            setEditingId(movie.id);
+                            setEditValue(movie.title);
+                        }}
+                        className={`text-sm leading-snug pt-0.5 flex-1 cursor-text transition-all ${movie.watched ? 'text-neutral-500 line-through' : 'text-neutral-300'}`}
+                        title="Click to edit"
+                    >
+                        {movie.title}
+                    </span>
+                )}
+
+                <button
+                    onClick={() => onDelete(movie.id)}
+                    className="opacity-0 group-hover:opacity-100 p-1 text-neutral-500 hover:text-red-400 transition-colors absolute right-2 top-0"
+                    title="Delete"
+                >
+                    <Icon name="trash" size={14} />
+                </button>
+            </div>
+
+            {movie.watched && (
+                <div className="pl-9 pr-8 mt-1 mb-1">
+                    <div className="flex flex-col gap-1.5 bg-neutral-900/50 rounded-lg p-3 border border-neutral-800/80 transition-colors hover:border-[#a5b4fc]/20">
+                        <div className="flex items-center gap-1">
+                            {[1, 2, 3, 4, 5].map(star => {
+                                const isFilled = (hoverRating || movie.rating || 0) >= star;
+                                return (
+                                    <button
+                                        key={star}
+                                        onMouseEnter={() => setHoverRating(star)}
+                                        onMouseLeave={() => setHoverRating(0)}
+                                        onClick={() => onUpdate(movie.id, { rating: star })}
+                                        className={`transition-colors ${isFilled ? 'text-yellow-400' : 'text-neutral-700 hover:text-[#a5b4fc]/50'}`}
+                                    >
+                                        <Icon name={isFilled ? "starFilled" : "star"} size={14} />
+                                    </button>
+                                );
+                            })}
+                        </div>
+
+                        {isEditingComment ? (
+                            <form onSubmit={handleSaveComment} className="mt-1">
+                                <input
+                                    autoFocus
+                                    type="text"
+                                    value={comment}
+                                    onChange={e => setComment(e.target.value)}
+                                    onBlur={handleSaveComment}
+                                    placeholder="What did you think of it?"
+                                    className="w-full bg-transparent border-b border-[#a5b4fc]/50 text-xs text-[#a5b4fc]/90 outline-none pb-1 font-serif italic"
+                                />
+                            </form>
+                        ) : (
+                            <p
+                                onClick={() => setIsEditingComment(true)}
+                                className={`text-xs mt-1 cursor-text transition-colors font-serif italic ${movie.comment ? 'text-[#a5b4fc]/80 hover:text-[#a5b4fc]' : 'text-neutral-600 hover:text-[#a5b4fc]/60'}`}
+                            >
+                                {movie.comment || "Add a review or note..."}
+                            </p>
+                        )}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+const MoviesVault = ({ movies, onAdd, onToggle, onDelete, onEdit, onUpdate }) => {
+    const [inputValue, setInputValue] = useState('');
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -336,60 +454,99 @@ const MoviesVault = ({ movies, onAdd, onToggle, onDelete, onEdit }) => {
                 </button>
             </form>
 
-            <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto custom-scrollbar pr-2">
+            <div className="flex flex-col gap-1 max-h-[400px] overflow-y-auto custom-scrollbar pr-2">
                 {movies.map(movie => (
-                    <div key={movie.id} className={`group flex items-start gap-4 p-3 rounded-xl transition-colors relative ${movie.watched ? 'bg-neutral-900/40 opacity-50' : 'hover:bg-neutral-800/40'}`}>
-                        <button
-                            onClick={() => onToggle(movie)}
-                            className={`mt-0.5 flex-shrink-0 w-5 h-5 rounded border flex items-center justify-center transition-colors relative overflow-hidden ${movie.watched ? 'border-[#a5b4fc]' : 'border-neutral-600'}`}
-                        >
-                            <div className={`absolute inset-0 transition-opacity ${movie.watched ? 'opacity-100 bg-[#a5b4fc]' : 'opacity-0 group-hover:opacity-100 bg-[#a5b4fc]/20'}`} />
-                            <Icon name="check" size={12} className={`relative z-10 transition-opacity ${movie.watched ? 'text-black opacity-100' : 'text-[#a5b4fc] opacity-0 group-hover:opacity-100'}`} />
-                        </button>
-
-                        {editingId === movie.id ? (
-                            <input
-                                autoFocus
-                                type="text"
-                                value={editValue}
-                                onChange={(e) => setEditValue(e.target.value)}
-                                onBlur={() => {
-                                    if (editValue.trim() !== movie.title) onEdit(movie.id, editValue.trim());
-                                    setEditingId(null);
-                                }}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                        if (editValue.trim() !== movie.title) onEdit(movie.id, editValue.trim());
-                                        setEditingId(null);
-                                    }
-                                }}
-                                className="flex-1 bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-0.5"
-                            />
-                        ) : (
-                            <span
-                                onClick={() => {
-                                    setEditingId(movie.id);
-                                    setEditValue(movie.title);
-                                }}
-                                className={`text-sm leading-snug pt-0.5 flex-1 cursor-text transition-all ${movie.watched ? 'text-neutral-500 line-through' : 'text-neutral-300'}`}
-                                title="Click to edit"
-                            >
-                                {movie.title}
-                            </span>
-                        )}
-
-                        <button
-                            onClick={() => onDelete(movie.id)}
-                            className="opacity-0 group-hover:opacity-100 p-1 text-neutral-500 hover:text-red-400 transition-colors absolute right-2 top-2"
-                            title="Delete"
-                        >
-                            <Icon name="trash" size={14} />
-                        </button>
-                    </div>
+                    <MovieItem
+                        key={movie.id}
+                        movie={movie}
+                        onToggle={onToggle}
+                        onDelete={onDelete}
+                        onEdit={onEdit}
+                        onUpdate={onUpdate}
+                    />
                 ))}
                 {movies.length === 0 && (
                     <div className="text-sm text-neutral-600 italic text-center mt-6 mb-6">No movies or shows added yet.</div>
                 )}
+            </div>
+        </div>
+    );
+};
+
+const ArchivedItem = ({ item, onRestore, onUpdate }) => {
+    const [hoverRating, setHoverRating] = useState(0);
+    const [isEditing, setIsEditing] = useState(false);
+    const [comment, setComment] = useState(item.comment || '');
+
+    const handleSaveComment = (e) => {
+        if (e) e.preventDefault();
+        if (comment.trim() !== (item.comment || '')) {
+            onUpdate(item.id, { comment: comment.trim() });
+        }
+        setIsEditing(false);
+    };
+
+    return (
+        <div className="flex flex-col gap-2 pb-5 border-b border-neutral-800/50 last:border-0 group relative">
+            <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                    <div className="mt-1 w-4 h-4 rounded-full border border-[#88aaff]/50 flex items-center justify-center flex-shrink-0">
+                        <Icon name="check" size={10} className="text-[#88aaff]" />
+                    </div>
+                    <span className="text-sm text-neutral-200">{item.text}</span>
+                </div>
+                <div className="flex items-center gap-3">
+                    <button
+                        onClick={() => onRestore(item)}
+                        title="Restore to board"
+                        className="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-white transition-colors"
+                    >
+                        <Icon name="undo" size={14} />
+                    </button>
+                    <span className="text-[10px] font-mono text-neutral-600 flex-shrink-0 pt-1">{item.date}</span>
+                </div>
+            </div>
+
+            <div className="pl-7 pr-4">
+                <div className="flex flex-col gap-1.5 bg-neutral-900/30 rounded-lg p-3 border border-neutral-800/50 transition-colors hover:border-neutral-700/50">
+                    <div className="flex items-center gap-1">
+                        {[1, 2, 3, 4, 5].map(star => {
+                            const isFilled = (hoverRating || item.rating || 0) >= star;
+                            return (
+                                <button
+                                    key={star}
+                                    onMouseEnter={() => setHoverRating(star)}
+                                    onMouseLeave={() => setHoverRating(0)}
+                                    onClick={() => onUpdate(item.id, { rating: star })}
+                                    className={`transition-colors ${isFilled ? 'text-yellow-400' : 'text-neutral-700 hover:text-yellow-200'}`}
+                                >
+                                    <Icon name={isFilled ? "starFilled" : "star"} size={14} />
+                                </button>
+                            );
+                        })}
+                    </div>
+
+                    {isEditing ? (
+                        <form onSubmit={handleSaveComment} className="mt-1">
+                            <input
+                                autoFocus
+                                type="text"
+                                value={comment}
+                                onChange={e => setComment(e.target.value)}
+                                onBlur={handleSaveComment}
+                                placeholder="Write a memory..."
+                                className="w-full bg-transparent border-b border-neutral-500 text-xs text-neutral-300 outline-none pb-1 font-serif italic"
+                            />
+                        </form>
+                    ) : (
+                        <p
+                            onClick={() => setIsEditing(true)}
+                            className={`text-xs mt-1 cursor-text transition-colors font-serif italic ${item.comment ? 'text-neutral-400 hover:text-neutral-300' : 'text-neutral-700 hover:text-neutral-500'}`}
+                        >
+                            {item.comment || "Add a memory or note..."}
+                        </p>
+                    )}
+                </div>
             </div>
         </div>
     );
@@ -572,9 +729,13 @@ export default function VisionBoard() {
 
     const handleToggleMovie = async (item) => {
         if (!user) return;
-        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', item.id), {
-            watched: !item.watched
-        });
+        const updates = { watched: !item.watched };
+        if (item.watched) {
+            // Wiping out the review and rating when un-watching
+            updates.rating = null;
+            updates.comment = '';
+        }
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', item.id), updates);
     };
 
     const handleDeleteMovie = async (id) => {
@@ -585,6 +746,11 @@ export default function VisionBoard() {
     const handleEditMovie = async (id, newTitle) => {
         if (!user) return;
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', id), { title: newTitle });
+    };
+
+    const handleUpdateMovie = async (id, updates) => {
+        if (!user) return;
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', id), updates);
     };
 
     const handleVaultAdd = async (text) => {
@@ -646,6 +812,11 @@ export default function VisionBoard() {
 
         // Remove from the Archive Hall of Fame
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', item.id));
+    };
+
+    const handleUpdateArchiveItem = async (id, updates) => {
+        if (!user) return;
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', id), updates);
     };
 
     const groupedArchive = archivedItems.reduce((acc, item) => {
@@ -806,6 +977,7 @@ export default function VisionBoard() {
                     onToggle={handleToggleMovie}
                     onDelete={handleDeleteMovie}
                     onEdit={handleEditMovie}
+                    onUpdate={handleUpdateMovie}
                 />
 
                 {/* The Archive / Hall of Fame */}
@@ -839,26 +1011,12 @@ export default function VisionBoard() {
                                     </div>
                                     <div className="space-y-4">
                                         {items.map(item => (
-                                            <div key={item.id} className="flex flex-col gap-1 pb-4 border-b border-neutral-800/50 last:border-0 group">
-                                                <div className="flex items-start justify-between gap-4">
-                                                    <div className="flex items-start gap-3">
-                                                        <div className="mt-1 w-4 h-4 rounded-full border border-[#88aaff]/50 flex items-center justify-center flex-shrink-0">
-                                                            <Icon name="check" size={10} className="text-[#88aaff]" />
-                                                        </div>
-                                                        <span className="text-sm text-neutral-200">{item.text}</span>
-                                                    </div>
-                                                    <div className="flex items-center gap-3">
-                                                        <button
-                                                            onClick={() => handleRestore(item)}
-                                                            title="Restore to board"
-                                                            className="opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-white transition-colors"
-                                                        >
-                                                            <Icon name="undo" size={14} />
-                                                        </button>
-                                                        <span className="text-[10px] font-mono text-neutral-600 flex-shrink-0 pt-1">{item.date}</span>
-                                                    </div>
-                                                </div>
-                                            </div>
+                                            <ArchivedItem
+                                                key={item.id}
+                                                item={item}
+                                                onRestore={handleRestore}
+                                                onUpdate={handleUpdateArchiveItem}
+                                            />
                                         ))}
                                     </div>
                                 </div>
