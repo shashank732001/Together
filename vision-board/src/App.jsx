@@ -52,7 +52,9 @@ const Icon = ({ name, size = 16, className = "", style = {} }) => {
         deep_dives: <><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" /><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" /></>,
         culture: <><path d="M12 3 2 7l10 4 10-4-10-4Z" /><path d="M6 11v5" /><path d="M10 11v5" /><path d="M14 11v5" /><path d="M18 11v5" /><path d="M4 16h16" /><path d="M4 21h16" /></>,
         star: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />,
-        starFilled: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" fill="currentColor" stroke="none" />
+        starFilled: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" fill="currentColor" stroke="none" />,
+        search: <><circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /></>,
+        chevronDown: <polyline points="6 9 12 15 18 9" />
     };
 
     return (
@@ -68,6 +70,11 @@ const Icon = ({ name, size = 16, className = "", style = {} }) => {
 
 const LIME = "#ccff00";
 
+// --- CONFIGURATION ---
+// To change the date to when you first met, just edit this string! 
+// Format: 'YYYY-MM-DDTHH:mm:ss' (Year-Month-Day T Hours:Minutes:Seconds)
+const START_DATE = '2026-08-03T22:00:00';
+
 const CATEGORIES = [
     { id: 'dining', label: 'DINING', sub: 'Tasting the world, one table at a time.', iconName: 'dining' },
     { id: 'cooking', label: 'COOKING', sub: 'Creating warmth in our shared kitchen.', iconName: 'cooking' },
@@ -78,6 +85,79 @@ const CATEGORIES = [
     { id: 'deep_dives', label: 'DEEP DIVES', sub: 'Growing together, mind and soul.', iconName: 'deep_dives' },
     { id: 'culture', label: 'CULTURE', sub: 'Finding beauty in the universe around us.', iconName: 'culture' }
 ];
+
+const TimeTogether = ({ startDate }) => {
+    const [time, setTime] = useState({ days: '0', hours: '00', minutes: '00', seconds: '00' });
+    const [isStarted, setIsStarted] = useState(false);
+
+    useEffect(() => {
+        const calculateTime = () => {
+            const start = new Date(startDate).getTime();
+            const now = new Date().getTime();
+            const diff = now - start;
+
+            if (diff < 0) {
+                setIsStarted(false);
+                return;
+            }
+
+            setIsStarted(true);
+            setTime({
+                days: Math.floor(diff / (1000 * 60 * 60 * 24)).toString(),
+                hours: Math.floor((diff / (1000 * 60 * 60)) % 24).toString().padStart(2, '0'),
+                minutes: Math.floor((diff / 1000 / 60) % 60).toString().padStart(2, '0'),
+                seconds: Math.floor((diff / 1000) % 60).toString().padStart(2, '0')
+            });
+        };
+
+        calculateTime();
+        const timer = setInterval(calculateTime, 1000);
+        return () => clearInterval(timer);
+    }, [startDate]);
+
+    if (!isStarted) {
+        return (
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-neutral-700 bg-neutral-900/50 backdrop-blur-sm text-neutral-300 text-xs font-mono mb-8 w-fit">
+                <Icon name="sparkles" size={12} className="text-[#ccff00]" />
+                <span>Just beginning...</span>
+            </div>
+        );
+    }
+
+    return (
+        <div className="flex flex-col gap-3 mb-10 w-fit">
+            <div className="flex items-center gap-2 ml-1">
+                <Icon name="sparkles" size={14} className="text-[#ccff00]" />
+                <span className="text-[10px] tracking-[0.2em] font-bold text-neutral-400 uppercase">Orbiting together for</span>
+            </div>
+
+            <div className="flex items-center gap-3 sm:gap-5 bg-neutral-900/40 border border-neutral-800/80 rounded-2xl py-3 px-4 sm:px-6 backdrop-blur-md shadow-xl transition-all hover:bg-neutral-900/60 hover:border-neutral-700">
+                <div className="flex flex-col items-center min-w-[40px] sm:min-w-[50px]">
+                    <span className="text-2xl sm:text-3xl font-serif text-white tabular-nums tracking-tight">{time.days}</span>
+                    <span className="text-[9px] tracking-[0.2em] text-neutral-500 uppercase mt-1">Days</span>
+                </div>
+                <div className="w-px h-8 bg-neutral-800"></div>
+
+                <div className="flex flex-col items-center min-w-[32px] sm:min-w-[40px]">
+                    <span className="text-2xl sm:text-3xl font-serif text-white tabular-nums tracking-tight">{time.hours}</span>
+                    <span className="text-[9px] tracking-[0.2em] text-neutral-500 uppercase mt-1">Hrs</span>
+                </div>
+                <div className="w-px h-8 bg-neutral-800"></div>
+
+                <div className="flex flex-col items-center min-w-[32px] sm:min-w-[40px]">
+                    <span className="text-2xl sm:text-3xl font-serif text-white tabular-nums tracking-tight">{time.minutes}</span>
+                    <span className="text-[9px] tracking-[0.2em] text-neutral-500 uppercase mt-1">Min</span>
+                </div>
+                <div className="w-px h-8 bg-neutral-800"></div>
+
+                <div className="flex flex-col items-center min-w-[32px] sm:min-w-[40px]">
+                    <span className="text-2xl sm:text-3xl font-serif text-[#ccff00] tabular-nums tracking-tight">{time.seconds}</span>
+                    <span className="text-[9px] tracking-[0.2em] text-[#ccff00]/60 uppercase mt-1">Sec</span>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const SectionHeader = ({ subtitle, title, iconName, rightContent, accent = LIME }) => (
     <div className="mb-6">
@@ -561,6 +641,9 @@ export default function VisionBoard() {
     const [archivedItems, setArchivedItems] = useState([]);
     const [ideaVault, setIdeaVault] = useState([]);
     const [isVaultOpen, setIsVaultOpen] = useState(false);
+    const [archiveSearch, setArchiveSearch] = useState('');
+    const [archiveRating, setArchiveRating] = useState(0);
+    const [archiveMonth, setArchiveMonth] = useState('all');
 
     // Helper for strictly scoped artifact paths
     const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
@@ -819,7 +902,32 @@ export default function VisionBoard() {
         await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', id), updates);
     };
 
-    const groupedArchive = archivedItems.reduce((acc, item) => {
+    // Helper to extract the month and year for filtering
+    const getMonthYear = (timestamp) => {
+        if (!timestamp) return 'Unknown Date';
+        const d = new Date(timestamp);
+        return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    };
+
+    // Generate unique months from the archived items for the dropdown
+    const availableMonths = [...new Set(archivedItems.map(item => getMonthYear(item.createdAt)))];
+
+    // Apply filters
+    const filteredArchive = archivedItems.filter(item => {
+        const searchMatch = !archiveSearch ||
+            item.text.toLowerCase().includes(archiveSearch.toLowerCase()) ||
+            (item.comment && item.comment.toLowerCase().includes(archiveSearch.toLowerCase()));
+
+        const ratingMatch = archiveRating === 0 ||
+            (archiveRating === -1 && !item.rating) ||
+            (archiveRating > 0 && item.rating === archiveRating);
+
+        const monthMatch = archiveMonth === 'all' || getMonthYear(item.createdAt) === archiveMonth;
+
+        return searchMatch && ratingMatch && monthMatch;
+    });
+
+    const groupedArchive = filteredArchive.reduce((acc, item) => {
         if (!acc[item.category]) acc[item.category] = [];
         acc[item.category].push(item);
         return acc;
@@ -882,6 +990,7 @@ export default function VisionBoard() {
 
                 {/* Hero Section */}
                 <div className="flex flex-col mb-16 max-w-4xl">
+                    <TimeTogether startDate={START_DATE} />
                     <h1 className="text-5xl md:text-6xl lg:text-7xl font-serif tracking-tight text-white leading-[1.1] mb-6">
                         Two people, <span className="text-transparent bg-clip-text bg-gradient-to-r from-[#a5b4fc] via-[#f4f4f5] to-[#fbbf24]">one unfolding<br />universe.</span>
                     </h1>
@@ -997,10 +1106,58 @@ export default function VisionBoard() {
                         </div>
                     </div>
 
+                    {/* Archive Filter Bar */}
+                    {archivedItems.length > 0 && (
+                        <div className="flex flex-col md:flex-row gap-4 mb-10 relative z-10">
+                            <div className="relative flex-1">
+                                <Icon name="search" size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-500" />
+                                <input
+                                    type="text"
+                                    placeholder="Search memories, titles, or notes..."
+                                    value={archiveSearch}
+                                    onChange={(e) => setArchiveSearch(e.target.value)}
+                                    className="w-full bg-neutral-900/50 border border-neutral-800 rounded-xl py-3 pl-11 pr-4 text-sm text-neutral-200 focus:outline-none focus:border-[#88aaff]/50 transition-colors"
+                                />
+                            </div>
+                            <div className="flex flex-col sm:flex-row gap-4 w-full md:w-auto">
+                                <div className="relative flex-1 sm:flex-none">
+                                    <select
+                                        value={archiveRating}
+                                        onChange={(e) => setArchiveRating(Number(e.target.value))}
+                                        className="w-full sm:w-auto bg-neutral-900/50 border border-neutral-800 rounded-xl py-3 pl-4 pr-10 text-sm text-neutral-200 focus:outline-none focus:border-[#88aaff]/50 appearance-none cursor-pointer transition-colors"
+                                    >
+                                        <option value={0}>All Ratings</option>
+                                        <option value={5}>5 Stars</option>
+                                        <option value={4}>4 Stars</option>
+                                        <option value={3}>3 Stars</option>
+                                        <option value={2}>2 Stars</option>
+                                        <option value={1}>1 Star</option>
+                                        <option value={-1}>Unrated</option>
+                                    </select>
+                                    <Icon name="chevronDown" size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-500 pointer-events-none" />
+                                </div>
+
+                                <div className="relative flex-1 sm:flex-none">
+                                    <select
+                                        value={archiveMonth}
+                                        onChange={(e) => setArchiveMonth(e.target.value)}
+                                        className="w-full sm:w-auto bg-neutral-900/50 border border-neutral-800 rounded-xl py-3 pl-4 pr-10 text-sm text-neutral-200 focus:outline-none focus:border-[#88aaff]/50 appearance-none cursor-pointer transition-colors"
+                                    >
+                                        <option value="all">All Time</option>
+                                        {availableMonths.map(m => <option key={m} value={m}>{m}</option>)}
+                                    </select>
+                                    <Icon name="chevronDown" size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-500 pointer-events-none" />
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-12 gap-y-16 relative z-10">
                         {Object.keys(groupedArchive).length === 0 ? (
                             <div className="col-span-full text-center py-12 text-neutral-600">
-                                The archive is waiting for your first completed intention.
+                                {archivedItems.length === 0
+                                    ? "The archive is waiting for your first completed intention."
+                                    : "No memories found matching your search filters."}
                             </div>
                         ) : (
                             Object.entries(groupedArchive).map(([categoryName, items]) => (
