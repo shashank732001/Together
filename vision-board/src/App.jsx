@@ -487,12 +487,12 @@ const ArchivedItem = ({ item, onRestore, onUpdate }) => {
 };
 
 const CosmicBackground = () => (
-    <div className="fixed inset-0 z-0 pointer-events-none bg-[#050505] overflow-hidden">
+    <div className="fixed inset-0 z-0 pointer-events-none bg-gradient-to-b from-[#02040a] via-[#060c17] to-[#0b172a] overflow-hidden">
         {/* Deep space aurora drift */}
-        <div className="absolute -inset-[100%] bg-aurora opacity-60" />
+        <div className="absolute -inset-[100%] bg-aurora opacity-50 mix-blend-screen" />
 
         {/* Base static stars to prevent empty sky */}
-        <div className="bg-star-layer bg-layer-base" />
+        <div className="bg-star-layer bg-layer-base opacity-40" />
 
         {/* 3 distinct star layers for depth and asynchronous twinkling */}
         <div className="bg-star-layer bg-layer-1" />
@@ -641,7 +641,7 @@ export default function MemoryBook() {
         @keyframes twinkle-3 {
           0%, 100% { opacity: 0.6; }
           40% { opacity: 0.1; }
-          80% { opacity: 1; }
+          80% { opacity: 0.8; }
         }
         
         @keyframes meteor-fall {
@@ -695,7 +695,7 @@ export default function MemoryBook() {
             radial-gradient(1px 1px at 30% 40%, rgba(255,255,255,0.8), transparent),
             radial-gradient(1px 1px at 80% 70%, rgba(255,255,255,0.8), transparent);
           background-size: 150px 150px;
-          animation: twinkle-1 5s infinite ease-in-out, star-rotate 3500s linear infinite;
+          animation: twinkle-1 23s infinite ease-in-out, star-rotate 3500s linear infinite;
         }
         
         .bg-layer-2 {
@@ -703,7 +703,7 @@ export default function MemoryBook() {
             radial-gradient(1.5px 1.5px at 20% 80%, rgba(255,255,255,0.9), transparent),
             radial-gradient(1.5px 1.5px at 70% 30%, rgba(255,255,255,0.9), transparent);
           background-size: 250px 250px;
-          animation: twinkle-2 8s infinite ease-in-out, star-rotate 3000s linear infinite;
+          animation: twinkle-2 31s infinite ease-in-out, star-rotate 3000s linear infinite;
         }
         
         .bg-layer-3 {
@@ -711,7 +711,7 @@ export default function MemoryBook() {
             radial-gradient(2px 2px at 50% 50%, #fff, transparent),
             radial-gradient(2px 2px at 85% 15%, #fff, transparent);
           background-size: 400px 400px;
-          animation: twinkle-3 12s infinite ease-in-out, star-rotate 2500s linear infinite;
+          animation: twinkle-3 37s infinite ease-in-out, star-rotate 2500s linear infinite;
         }
 
         .meteor-shower {
@@ -755,7 +755,7 @@ export default function MemoryBook() {
             <CosmicBackground />
 
             {/* Top Navigation */}
-            <nav className="border-b border-white/5 bg-neutral-950/40 backdrop-blur-2xl sticky top-0 z-40">
+            <nav className="border-b border-white/5 bg-[#02040a]/40 backdrop-blur-2xl sticky top-0 z-40">
                 <div className="max-w-[1400px] mx-auto px-6 h-14 flex items-center justify-between">
                     <div className="flex items-center gap-3">
                         <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-neutral-800 to-neutral-900 border border-white/10 flex items-center justify-center shadow-inner">
