@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc, updateDoc } from 'firebase/firestore';
@@ -69,6 +69,13 @@ const Icon = ({ name, size = 16, className = "", style = {} }) => {
 };
 
 const START_DATE = '2026-08-03T22:00:00';
+
+// First-run default only. After that, change the passcode any time by editing
+// the "passcode" field on the artifacts/{appId}/public/data/config/access
+// document in the Firebase console — no redeploy needed.
+const DEFAULT_PASSCODE = 'CHANGE-ME';
+const ACTIVITY_STORAGE_KEY = 'mb_last_active';
+const INACTIVITY_LIMIT_MS = 2 * 60 * 1000; // re-lock after this long idle (currently 1 min)
 
 const CATEGORIES = [
     { id: 'dining', label: 'DINING', sub: 'Tasting the world, one table at a time.', iconName: 'dining' },
@@ -486,32 +493,109 @@ const ArchivedItem = ({ item, onRestore, onUpdate }) => {
     );
 };
 
-const CosmicBackground = () => (
-    <div className="fixed inset-0 z-0 pointer-events-none bg-gradient-to-b from-[#02040a] via-[#060c17] to-[#0b172a] overflow-hidden">
-        {/* Deep space aurora drift */}
-        <div className="absolute -inset-[100%] bg-aurora opacity-50 mix-blend-screen" />
+const METEOR_COUNT = 6;
 
-        {/* Base static stars to prevent empty sky */}
-        <div className="bg-star-layer bg-layer-base opacity-40" />
+// 180deg-360deg only, so meteors always fall down/sideways, never upward.
+// 180/360 = purely horizontal, 270 = straight down, everything else diagonal.
+const randomMeteor = () => ({
+    top: (Math.random() * 80 - 10).toFixed(1),
+    right: (Math.random() * 130 - 20).toFixed(1),
+    angle: (180 + Math.random() * 180).toFixed(1),
+    duration: (14 + Math.random() * 20).toFixed(1),
+    delay: (Math.random() * 25).toFixed(1),
+});
 
-        {/* 3 distinct star layers for depth and asynchronous twinkling */}
-        <div className="bg-star-layer bg-layer-1" />
-        <div className="bg-star-layer bg-layer-2" />
-        <div className="bg-star-layer bg-layer-3" />
+const CosmicBackground = () => {
+    const meteors = useMemo(() => Array.from({ length: METEOR_COUNT }, randomMeteor), []);
 
-        {/* The Meteor Shower (Perseids) */}
-        <div className="meteor-shower">
-            <div className="meteor m-1" style={{ '--angle': '215deg' }} />
-            <div className="meteor m-2" style={{ '--angle': '235deg' }} />
-            <div className="meteor m-3" style={{ '--angle': '205deg' }} />
-            <div className="meteor m-4" style={{ '--angle': '245deg' }} />
-            <div className="meteor m-5" style={{ '--angle': '195deg' }} />
-            <div className="meteor m-6" style={{ '--angle': '225deg' }} />
+    return (
+        <div className="fixed inset-0 z-0 pointer-events-none bg-gradient-to-b from-[#02040a] via-[#060c17] to-[#0b172a] overflow-hidden">
+            {/* Deep space aurora drift */}
+            <div className="absolute -inset-[100%] bg-aurora opacity-50 mix-blend-screen" />
+
+            {/* Base static stars to prevent empty sky */}
+            <div className="bg-star-layer bg-layer-base opacity-40" />
+
+            {/* 3 distinct star layers for depth and asynchronous twinkling */}
+            <div className="bg-star-layer bg-layer-1" />
+            <div className="bg-star-layer bg-layer-2" />
+            <div className="bg-star-layer bg-layer-3" />
+
+            {/* The Meteor Shower (Perseids) — random start point, angle and timing each load */}
+            <div className="meteor-shower">
+                {meteors.map((m, i) => (
+                    <div
+                        key={i}
+                        className="meteor"
+                        style={{
+                            top: `${m.top}%`,
+                            right: `${m.right}%`,
+                            '--angle': `${m.angle}deg`,
+                            animation: `meteor-fall ${m.duration}s infinite ${m.delay}s`,
+                        }}
+                    />
+                ))}
+            </div>
         </div>
-    </div>
-);
+    );
+};
+
+const LockScreen = ({ passcode, onUnlock }) => {
+    const [code, setCode] = useState('');
+    const [error, setError] = useState(false);
+    const loading = passcode === null;
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        if (loading) return;
+        if (code.trim().toLowerCase() === String(passcode).trim().toLowerCase()) {
+            onUnlock();
+        } else {
+            setError(true);
+            setCode('');
+            setTimeout(() => setError(false), 2000);
+        }
+    };
+
+    return (
+        <div className="min-h-screen w-full flex items-center justify-center relative z-10 px-6">
+            <SpotlightCard spotlightColor="rgba(204, 255, 0, 0.1)" className="w-full max-w-sm bg-neutral-950/80 border border-neutral-800/80 rounded-3xl p-8 md:p-10 shadow-2xl backdrop-blur-xl">
+                <div className="relative z-10 flex flex-col items-center text-center">
+                    <div className="p-3 rounded-2xl bg-neutral-900 border border-neutral-800/50 mb-6">
+                        <Icon name="lock" size={22} className="text-[#ccff00]" />
+                    </div>
+                    <h1 className="text-2xl font-serif text-white tracking-tight mb-2">A Private Universe</h1>
+                    <p className="text-xs text-neutral-500 mb-8 leading-relaxed">Enter the code only we know.</p>
+
+                    <form onSubmit={handleSubmit} className="w-full">
+                        <Input
+                            type="password"
+                            autoFocus
+                            value={code}
+                            onChange={(e) => setCode(e.target.value)}
+                            placeholder={loading ? "Loading…" : "Enter code"}
+                            disabled={loading}
+                            className={`text-center tracking-[0.3em] bg-neutral-900/50 mb-4 ${error ? 'border-red-500/60' : 'border-neutral-800/80'}`}
+                        />
+                        <Button type="submit" disabled={!code.trim() || loading} className="w-full">
+                            Enter
+                        </Button>
+                        {error && <p className="text-[11px] text-red-400 mt-4">That's not it — try again.</p>}
+                    </form>
+                </div>
+            </SpotlightCard>
+        </div>
+    );
+};
 
 export default function MemoryBook() {
+    const [unlocked, setUnlocked] = useState(() => {
+        try {
+            const last = Number(localStorage.getItem(ACTIVITY_STORAGE_KEY) || 0);
+            return Date.now() - last < INACTIVITY_LIMIT_MS;
+        } catch { return false; }
+    });
+    const [passcode, setPasscode] = useState(null);
     const [user, setUser] = useState(null);
     const [ankItems, setAnkItems] = useState([]);
     const [amyItems, setAmyItems] = useState([]);
@@ -544,8 +628,47 @@ export default function MemoryBook() {
         return () => unsubscribe();
     }, []);
 
+    const markActive = () => {
+        try { localStorage.setItem(ACTIVITY_STORAGE_KEY, String(Date.now())); } catch { /* ignore storage errors */ }
+    };
+
+    const handleUnlock = () => {
+        markActive();
+        setUnlocked(true);
+    };
+
+    // Fetch the shared passcode from Firestore so it can be changed without a redeploy.
     useEffect(() => {
         if (!user) return;
+        const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'access');
+        const unsub = onSnapshot(configRef, (snap) => {
+            if (snap.exists()) {
+                setPasscode(snap.data().passcode ?? '');
+            } else {
+                setDoc(configRef, { passcode: DEFAULT_PASSCODE }).catch(() => {});
+            }
+        });
+        return () => unsub();
+    }, [user]);
+
+    // While unlocked, track activity and auto re-lock after INACTIVITY_LIMIT_MS of idle time.
+    useEffect(() => {
+        if (!unlocked) return;
+        markActive();
+        const events = ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart'];
+        events.forEach(ev => window.addEventListener(ev, markActive, { passive: true }));
+        const interval = setInterval(() => {
+            const last = Number(localStorage.getItem(ACTIVITY_STORAGE_KEY) || 0);
+            if (Date.now() - last >= INACTIVITY_LIMIT_MS) setUnlocked(false);
+        }, 15000);
+        return () => {
+            events.forEach(ev => window.removeEventListener(ev, markActive));
+            clearInterval(interval);
+        };
+    }, [unlocked]);
+
+    useEffect(() => {
+        if (!user || !unlocked) return;
         const unsubAnk = onSnapshot(getColRef('ankItems'), snap => setAnkItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)));
         const unsubAmy = onSnapshot(getColRef('amyItems'), snap => setAmyItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)));
         const unsubMovies = onSnapshot(getColRef('movies'), snap => {
@@ -560,7 +683,7 @@ export default function MemoryBook() {
         const unsubArchive = onSnapshot(getColRef('archivedItems'), snap => setArchivedItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => b.createdAt - a.createdAt)));
         const unsubVault = onSnapshot(getColRef('ideaVault'), snap => setIdeaVault(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)));
         return () => { unsubAnk(); unsubAmy(); unsubMovies(); unsubShared(); unsubArchive(); unsubVault(); };
-    }, [user]);
+    }, [user, unlocked]);
 
     const handleAddPersonal = async (board, text) => {
         if (!user) return;
@@ -646,8 +769,8 @@ export default function MemoryBook() {
         
         @keyframes meteor-fall {
           0% { opacity: 0; transform: rotate(var(--angle, -45deg)) translateX(0); }
-          0.5% { opacity: 1; }
-          2.5% { opacity: 0; transform: rotate(var(--angle, -45deg)) translateX(-1000px); }
+          1% { opacity: 1; }
+          9% { opacity: 0; transform: rotate(var(--angle, -45deg)) translateX(-1000px); }
           100% { opacity: 0; }
         }
 
@@ -742,18 +865,15 @@ export default function MemoryBook() {
           box-shadow: 0 0 4px 1px rgba(255, 255, 255, 0.4);
         }
 
-        /* Staggered meteor timings to make them unpredictable */
-        .m-1 { right: 15%; top: 5%; animation: meteor-fall 14s infinite 1s; }
-        .m-2 { right: 40%; top: 15%; animation: meteor-fall 21s infinite 6s; }
-        .m-3 { right: -5%; top: 25%; animation: meteor-fall 18s infinite 11s; }
-        .m-4 { right: 50%; top: -5%; animation: meteor-fall 29s infinite 3s; }
-        .m-5 { right: 10%; top: 40%; animation: meteor-fall 23s infinite 15s; }
-        .m-6 { right: -15%; top: 50%; animation: meteor-fall 34s infinite 21s; }
       `}</style>
 
             {/* Dynamic Cosmic Background */}
             <CosmicBackground />
 
+            {!unlocked ? (
+                <LockScreen passcode={passcode} onUnlock={handleUnlock} />
+            ) : (
+            <>
             {/* Top Navigation */}
             <nav className="border-b border-white/5 bg-[#02040a]/40 backdrop-blur-2xl sticky top-0 z-40">
                 <div className="max-w-[1400px] mx-auto px-6 h-14 flex items-center justify-between">
@@ -984,6 +1104,8 @@ export default function MemoryBook() {
                         </div>
                     </div>
                 </div>
+            )}
+            </>
             )}
         </div>
     );
