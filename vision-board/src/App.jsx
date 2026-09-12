@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc, updateDoc } from 'firebase/firestore';
+import { toPng } from 'html-to-image';
 
 // Safely loading specific Firebase configuration
 let fbConfig;
@@ -54,6 +55,9 @@ const Icon = ({ name, size = 16, className = "", style = {} }) => {
         starFilled: <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" fill="currentColor" stroke="none" />,
         search: <><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></>,
         chevronDown: <path d="m6 9 6 6 6-6" />,
+        printer: <><path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" /></>,
+        download: <><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M4 21h16" /></>,
+        upload: <><path d="M12 21V9" /><path d="m7 14 5-5 5 5" /><path d="M4 3h16" /></>,
     };
 
     return (
@@ -419,7 +423,7 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
     );
 };
 
-const ArchivedItem = ({ item, onRestore, onUpdate }) => {
+const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
     const [hoverRating, setHoverRating] = useState(0);
     const [isEditing, setIsEditing] = useState(false);
     const [comment, setComment] = useState(item.comment || '');
@@ -454,6 +458,15 @@ const ArchivedItem = ({ item, onRestore, onUpdate }) => {
                     <span className="text-sm font-medium text-neutral-300 leading-snug group-hover:text-white transition-colors">{item.text}</span>
                 </div>
                 <div className="flex items-center gap-2">
+                    <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-all bg-neutral-950/50 text-neutral-500 hover:text-white hover:bg-white/10"
+                        onClick={() => onPrint(item)}
+                        title="Print this memory"
+                    >
+                        <Icon name="printer" size={12} />
+                    </Button>
                     <Button
                         variant="ghost"
                         size="sm"
@@ -492,6 +505,51 @@ const ArchivedItem = ({ item, onRestore, onUpdate }) => {
         </div>
     );
 };
+
+// Always mounted off-screen; content updates from `item` and gets captured to a PNG on demand.
+// A light, print-friendly design on purpose — the dark UI card would waste ink on a B&W printer.
+const PrintCard = ({ item, cardRef }) => (
+    <div style={{ position: 'fixed', left: '-9999px', top: 0, pointerEvents: 'none' }}>
+        <div
+            ref={cardRef}
+            style={{
+                width: '640px',
+                padding: '56px 48px',
+                background: '#faf7f0',
+                color: '#1a1a1a',
+                fontFamily: "'Outfit', sans-serif",
+                border: '2px solid #1a1a1a',
+                boxSizing: 'border-box',
+                position: 'relative',
+            }}
+        >
+            {item && (
+                <>
+                    <div style={{ position: 'absolute', inset: '14px', border: '1px solid #c9c2b3', pointerEvents: 'none' }} />
+                    <div style={{ position: 'relative', textAlign: 'center' }}>
+                        <div style={{ fontSize: '11px', letterSpacing: '3px', fontWeight: 700, color: '#6b6252' }}>
+                            {(item.category || 'MEMORY').toUpperCase()}
+                        </div>
+                        <div style={{ fontSize: '22px', color: '#c9a227', margin: '18px 0' }}>
+                            {'★'.repeat(item.rating || 0)}{'☆'.repeat(5 - (item.rating || 0))}
+                        </div>
+                        <div style={{ fontFamily: "'Playfair Display', serif", fontStyle: 'italic', fontSize: '26px', lineHeight: 1.5, margin: 0 }}>
+                            “{item.text}”
+                        </div>
+                        {item.comment && (
+                            <div style={{ fontFamily: "'Playfair Display', serif", fontStyle: 'italic', fontSize: '17px', lineHeight: 1.6, color: '#4a4438', borderTop: '1px solid #c9c2b3', paddingTop: '22px', marginTop: '28px' }}>
+                                {item.comment}
+                            </div>
+                        )}
+                        <div style={{ marginTop: '36px', fontSize: '10px', letterSpacing: '2px', color: '#8a8270' }}>
+                            {item.date} &nbsp;·&nbsp; ANK &amp; AMY
+                        </div>
+                    </div>
+                </>
+            )}
+        </div>
+    </div>
+);
 
 const METEOR_COUNT = 6;
 
@@ -611,6 +669,12 @@ export default function MemoryBook() {
     const [archiveRating, setArchiveRating] = useState(0);
     const [archiveMonth, setArchiveMonth] = useState('all');
 
+    const [printItem, setPrintItem] = useState(null);
+    const printCardRef = useRef(null);
+
+    const [backupStatus, setBackupStatus] = useState('');
+    const fileInputRef = useRef(null);
+
     const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
 
     useEffect(() => {
@@ -715,6 +779,85 @@ export default function MemoryBook() {
             }
         }
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', item.id));
+    };
+
+    const handlePrint = async (item) => {
+        const printWin = window.open('', '_blank', 'width=680,height=880');
+        if (!printWin) { alert('Please allow pop-ups to print this memory.'); return; }
+        printWin.document.write('<title>Preparing your memory card…</title><body style="font-family:sans-serif;padding:40px;color:#888">Preparing your memory card…</body>');
+
+        setPrintItem(item);
+        // Let the hidden card re-render with this item, paint, and load its fonts before capturing.
+        await new Promise(requestAnimationFrame);
+        await new Promise(requestAnimationFrame);
+        try { await document.fonts.ready; } catch { /* fonts API unavailable, proceed anyway */ }
+
+        try {
+            const dataUrl = await toPng(printCardRef.current, { pixelRatio: 3, backgroundColor: '#faf7f0' });
+            printWin.document.open();
+            printWin.document.write(`
+                <html><head><title>${(item.text || 'Memory').slice(0, 60)}</title>
+                <style>
+                    @page { margin: 0; }
+                    html, body { margin: 0; padding: 0; background: #fff; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+                    img { max-width: 90%; height: auto; }
+                </style>
+                </head><body>
+                    <img src="${dataUrl}" onload="window.focus(); window.print();" />
+                </body></html>
+            `);
+            printWin.document.close();
+        } catch {
+            printWin.document.body.innerHTML = '<p style="font-family:sans-serif;padding:40px;color:#c00">Could not generate the print image. Please try again.</p>';
+        } finally {
+            setPrintItem(null);
+        }
+    };
+
+    const handleExportBackup = () => {
+        const payload = {
+            app: 'ank-and-amy-memory-book',
+            kind: 'constellations-backup',
+            version: 1,
+            exportedAt: new Date().toISOString(),
+            items: archivedItems.map(({ id, text, category, date, source, comment, rating, createdAt }) => ({
+                id, text, category, date, source, comment: comment || '', rating: rating || 0, createdAt: createdAt || null,
+            })),
+        };
+        const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `constellations-backup-${new Date().toISOString().slice(0, 10)}.txt`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    };
+
+    const handleImportFile = async (e) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file || !user) return;
+        try {
+            const payload = JSON.parse(await file.text());
+            const items = Array.isArray(payload.items) ? payload.items : Array.isArray(payload) ? payload : null;
+            if (!items) throw new Error('Unrecognized backup format');
+
+            const existingIds = new Set(archivedItems.map(i => i.id));
+            let imported = 0, skipped = 0;
+            for (const raw of items) {
+                const { id, ...data } = raw;
+                if (id && existingIds.has(id)) { skipped++; continue; }
+                if (id) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', id), data);
+                else await addDoc(getColRef('archivedItems'), data);
+                imported++;
+            }
+            setBackupStatus(`Restored ${imported} memor${imported === 1 ? 'y' : 'ies'}${skipped ? `, skipped ${skipped} already here` : ''}.`);
+        } catch {
+            setBackupStatus("Could not read that file — make sure it's a backup exported from this site.");
+        }
+        setTimeout(() => setBackupStatus(''), 5000);
     };
 
     const getMonthYear = (timestamp) => timestamp ? new Date(timestamp).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : 'Unknown Date';
@@ -870,6 +1013,9 @@ export default function MemoryBook() {
             {/* Dynamic Cosmic Background */}
             <CosmicBackground />
 
+            {/* Hidden template captured to an image when printing a memory */}
+            <PrintCard item={printItem} cardRef={printCardRef} />
+
             {!unlocked ? (
                 <LockScreen passcode={passcode} onUnlock={handleUnlock} />
             ) : (
@@ -996,11 +1142,24 @@ export default function MemoryBook() {
                                 Our Constellations.
                             </h2>
                         </div>
-                        <div className="px-5 py-2.5 rounded-full border border-white/10 bg-neutral-900/50 backdrop-blur-md flex items-center gap-2 shadow-xl">
-                            <Icon name="star" size={14} className="text-[#ccff00]" />
-                            <span className="text-xs font-bold tracking-wide text-neutral-200">{archivedItems.length} STARS</span>
+                        <div className="flex flex-wrap items-center gap-3">
+                            <input ref={fileInputRef} type="file" accept=".txt,.json,application/json,text/plain" onChange={handleImportFile} className="hidden" />
+                            <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="gap-2 text-neutral-300 border-white/10 rounded-full px-4">
+                                <Icon name="upload" size={12} /> Import Backup
+                            </Button>
+                            <Button variant="outline" size="sm" onClick={handleExportBackup} className="gap-2 text-neutral-300 border-white/10 rounded-full px-4">
+                                <Icon name="download" size={12} /> Export Backup
+                            </Button>
+                            <div className="px-5 py-2.5 rounded-full border border-white/10 bg-neutral-900/50 backdrop-blur-md flex items-center gap-2 shadow-xl">
+                                <Icon name="star" size={14} className="text-[#ccff00]" />
+                                <span className="text-xs font-bold tracking-wide text-neutral-200">{archivedItems.length} STARS</span>
+                            </div>
                         </div>
                     </div>
+
+                    {backupStatus && (
+                        <p className="text-xs text-neutral-400 -mt-4 mb-8">{backupStatus}</p>
+                    )}
 
                     {archivedItems.length > 0 && (
                         <div className="flex flex-col md:flex-row gap-4 mb-12 p-5 bg-neutral-900/40 backdrop-blur-xl rounded-2xl border border-white/5 shadow-2xl">
@@ -1045,6 +1204,7 @@ export default function MemoryBook() {
                                                 key={item.id} item={item}
                                                 onRestore={handleRestore}
                                                 onUpdate={(id, updates) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', id), updates)}
+                                                onPrint={handlePrint}
                                             />
                                         ))}
                                     </div>
