@@ -124,7 +124,7 @@ const SpotlightCard = ({ children, className = "", spotlightColor = "rgba(255,25
 };
 
 const DotSeparator = () => (
-    <div className="w-1.5 h-1.5 bg-neutral-700/80 rotate-45 mx-2 shadow-[0_0_8px_rgba(255,255,255,0.1)]" style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
+    <div className="w-1.5 h-1.5 bg-neutral-700/80 rotate-45 mx-1 sm:mx-2 shadow-[0_0_8px_rgba(255,255,255,0.1)]" style={{ clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' }} />
 );
 
 const TimeTogether = ({ startDate }) => {
@@ -156,19 +156,19 @@ const TimeTogether = ({ startDate }) => {
     if (!isStarted) return null;
 
     return (
-        <SpotlightCard spotlightColor="rgba(204, 255, 0, 0.15)" className="inline-flex items-center rounded-full border border-[#ccff00]/10 bg-neutral-950/60 shadow-2xl backdrop-blur-xl mb-10 w-fit p-1">
-            <div className="flex items-center gap-2 px-4 py-2 bg-[#ccff00]/10 rounded-full">
-                <Icon name="sparkles" size={14} className="text-[#ccff00]" />
-                <span className="text-[11px] font-bold tracking-[0.2em] text-[#ccff00] uppercase">TOGETHER FOR</span>
+        <SpotlightCard spotlightColor="rgba(204, 255, 0, 0.15)" className="inline-flex items-center rounded-full border border-[#ccff00]/10 bg-neutral-950/60 shadow-2xl backdrop-blur-xl mb-10 w-fit max-w-full p-1">
+            <div className="flex items-center gap-1 sm:gap-2 px-2.5 sm:px-4 py-2 bg-[#ccff00]/10 rounded-full shrink-0">
+                <Icon name="sparkles" size={14} className="text-[#ccff00] shrink-0" />
+                <span className="text-[9px] sm:text-[11px] font-bold tracking-[0.1em] sm:tracking-[0.2em] text-[#ccff00] uppercase whitespace-nowrap">TOGETHER FOR</span>
             </div>
-            <div className="flex items-center px-5 text-neutral-300 font-serif tracking-tight tabular-nums">
-                <span className="font-bold text-white text-lg">{time.days}</span><span className="text-neutral-500 text-sm ml-1.5 font-sans">d</span>
+            <div className="flex items-center px-2.5 sm:px-5 text-neutral-300 font-serif tracking-tight tabular-nums">
+                <span className="font-bold text-white text-base sm:text-lg">{time.days}</span><span className="text-neutral-500 text-xs sm:text-sm ml-1 sm:ml-1.5 font-sans">d</span>
                 <DotSeparator />
-                <span className="font-bold text-white text-lg">{time.hours}</span><span className="text-neutral-500 text-sm ml-1.5 font-sans">h</span>
+                <span className="font-bold text-white text-base sm:text-lg">{time.hours}</span><span className="text-neutral-500 text-xs sm:text-sm ml-1 sm:ml-1.5 font-sans">h</span>
                 <DotSeparator />
-                <span className="font-bold text-white text-lg">{time.minutes}</span><span className="text-neutral-500 text-sm ml-1.5 font-sans">m</span>
+                <span className="font-bold text-white text-base sm:text-lg">{time.minutes}</span><span className="text-neutral-500 text-xs sm:text-sm ml-1 sm:ml-1.5 font-sans">m</span>
                 <DotSeparator />
-                <span className="font-bold text-[#ccff00] text-lg drop-shadow-[0_0_8px_rgba(204,255,0,0.5)]">{time.seconds}</span><span className="text-[#ccff00]/50 text-sm ml-1.5 font-sans">s</span>
+                <span className="font-bold text-[#ccff00] text-base sm:text-lg drop-shadow-[0_0_8px_rgba(204,255,0,0.5)]">{time.seconds}</span><span className="text-[#ccff00]/50 text-xs sm:text-sm ml-1 sm:ml-1.5 font-sans">s</span>
             </div>
         </SpotlightCard>
     );
@@ -180,6 +180,26 @@ const Input = ({ className, ...props }) => (
         {...props}
     />
 );
+
+// Grows with its content instead of scrolling text sideways like a single-line input.
+const AutoTextarea = ({ className = '', value, ...props }) => {
+    const ref = useRef(null);
+    useEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = `${el.scrollHeight}px`;
+    }, [value]);
+    return (
+        <textarea
+            ref={ref}
+            value={value}
+            rows={1}
+            className={`resize-none overflow-hidden ${className}`}
+            {...props}
+        />
+    );
+};
 
 const Button = ({ className, variant = "default", size = "default", ...props }) => {
     const baseStyle = "inline-flex items-center justify-center whitespace-nowrap rounded-lg text-sm font-medium ring-offset-neutral-950 transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-700 disabled:pointer-events-none disabled:opacity-50";
@@ -409,7 +429,7 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
                         </div>
                         {isEditingComment ? (
                             <form onSubmit={handleSaveComment} className="mt-1">
-                                <input autoFocus type="text" value={comment} onChange={e => setComment(e.target.value)} onBlur={handleSaveComment} placeholder="What did you think?" className="w-full bg-transparent border-b border-indigo-400/50 text-xs text-indigo-300 outline-none pb-1 font-serif italic" />
+                                <AutoTextarea autoFocus value={comment} onChange={e => setComment(e.target.value)} onBlur={handleSaveComment} placeholder="What did you think?" className="w-full bg-transparent border-b border-indigo-400/50 text-xs text-indigo-300 outline-none pb-1 font-serif italic leading-relaxed" />
                             </form>
                         ) : (
                             <p onClick={() => setIsEditingComment(true)} className={`text-xs mt-0.5 cursor-text transition-colors font-serif italic ${movie.comment ? 'text-indigo-300 hover:text-indigo-200' : 'text-neutral-600 hover:text-neutral-400'}`}>
@@ -494,7 +514,7 @@ const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
                 </div>
                 {isEditing ? (
                     <form onSubmit={handleSaveComment}>
-                        <input autoFocus type="text" value={comment} onChange={e => setComment(e.target.value)} onBlur={handleSaveComment} placeholder="Write a memory..." className="w-full bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-1 font-serif italic focus:border-white" />
+                        <AutoTextarea autoFocus value={comment} onChange={e => setComment(e.target.value)} onBlur={handleSaveComment} placeholder="Write a memory..." className="w-full bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-1 font-serif italic leading-relaxed focus:border-white" />
                     </form>
                 ) : (
                     <p onClick={() => setIsEditing(true)} className={`text-sm cursor-text transition-colors font-serif italic ${item.comment ? 'text-neutral-400 hover:text-neutral-200' : 'text-neutral-600 hover:text-neutral-400'}`}>
@@ -798,9 +818,10 @@ export default function MemoryBook() {
             printWin.document.write(`
                 <html><head><title>${(item.text || 'Memory').slice(0, 60)}</title>
                 <style>
-                    @page { margin: 0; }
-                    html, body { margin: 0; padding: 0; background: #fff; min-height: 100vh; display: flex; align-items: center; justify-content: center; }
-                    img { max-width: 90%; height: auto; }
+                    @page { size: auto; margin: 10mm; }
+                    html, body { margin: 0; padding: 0; height: 100%; background: #fff; }
+                    body { display: flex; align-items: center; justify-content: center; }
+                    img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
                 </style>
                 </head><body>
                     <img src="${dataUrl}" onload="window.focus(); window.print();" />
@@ -884,7 +905,13 @@ export default function MemoryBook() {
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #262626; border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #404040; }
-        
+
+        /* iOS Safari auto-zooms the whole page when a focused input's font-size is under 16px.
+           Force 16px on mobile only so tapping any field doesn't leave the page zoomed in. */
+        @media (max-width: 767px) {
+          input, select, textarea { font-size: 16px !important; }
+        }
+
         /* Aceternity Style Background Animations */
         @keyframes star-rotate {
           from { transform: rotate(0deg); }
