@@ -1,3 +1,5 @@
+import animate from 'tailwindcss-animate';
+
 /** @type {import('tailwindcss').Config} */
 export default {
     content: [
@@ -5,6 +7,6 @@ export default {
         "./src/**/*.{js,ts,jsx,tsx}",
     ],
     theme: { extend: {} },
-    plugins: [],
+    plugins: [animate], // provides the animate-in / fade-in / slide-in-from-* classes
 }
 

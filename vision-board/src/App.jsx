@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc, updateDoc } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc, updateDoc, writeBatch, runTransaction } from 'firebase/firestore';
 import { toPng } from 'html-to-image';
 
 // Safely loading specific Firebase configuration
@@ -80,7 +80,7 @@ const START_DATE = '2026-08-03T22:00:00';
 // document in the Firebase console — no redeploy needed.
 const DEFAULT_PASSCODE = 'CHANGE-ME';
 const ACTIVITY_STORAGE_KEY = 'mb_last_active';
-const INACTIVITY_LIMIT_MS = 2 * 60 * 1000; // re-lock after this long idle (currently 1 min)
+const INACTIVITY_LIMIT_MS = 2 * 60 * 1000; // re-lock after this long idle (currently 2 min)
 
 const CATEGORIES = [
     { id: 'dining', label: 'DINING', sub: 'Tasting the world, one table at a time.', iconName: 'dining' },
@@ -92,6 +92,20 @@ const CATEGORIES = [
     { id: 'deep_dives', label: 'DEEP DIVES', sub: 'Growing together, mind and soul.', iconName: 'deep_dives' },
     { id: 'culture', label: 'CULTURE', sub: 'Finding beauty in the universe around us.', iconName: 'culture' }
 ];
+
+const BOARD_COLLECTIONS = { ank: 'ankItems', amy: 'amyItems' };
+
+const formatDay = (timestamp, withYear) =>
+    new Date(timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(withYear && { year: 'numeric' }) }).toUpperCase();
+
+// Completed memories used to store only "SEP 27", which gets ambiguous after a year. Their
+// createdAt timestamp has the year, so prefer it. The year is shown when it isn't this year,
+// or always with alwaysYear (printed cards).
+const memoryDate = (item, { alwaysYear = false } = {}) => {
+    if (!Number.isFinite(item.createdAt)) return item.date || '';
+    const isThisYear = new Date(item.createdAt).getFullYear() === new Date().getFullYear();
+    return formatDay(item.createdAt, alwaysYear || !isThisYear);
+};
 
 const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
 const ARCHIVE_SOURCES = ['ank', 'amy', 'shared'];
@@ -113,6 +127,7 @@ const sanitizeImportedMemory = (raw) => {
             category: cleanString(raw.category, 100) || 'MEMORY',
             date: cleanString(raw.date, 40),
             source: ARCHIVE_SOURCES.includes(raw.source) ? raw.source : '',
+            categoryId: CATEGORIES.some(c => c.id === raw.categoryId) ? raw.categoryId : '',
             comment: cleanString(raw.comment, 50000),
             rating: Number.isInteger(raw.rating) && raw.rating >= 0 && raw.rating <= 5 ? raw.rating : 0,
             createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : null,
@@ -229,6 +244,29 @@ const AutoTextarea = ({ className = '', value, ...props }) => {
     );
 };
 
+// Inline editor for titles and notes. Mount it when editing starts: it copies the current text
+// then, so it always starts from the latest saved version (including your partner's changes).
+// Clicking away saves (so does Enter on single-line fields), Escape cancels, and single-line
+// fields never save a blank value — the old text is kept instead. Notes can be cleared.
+const InlineEditor = ({ initialValue, onSave, onDone, multiline = false, as: Field = multiline ? AutoTextarea : 'input', ...props }) => {
+    const [value, setValue] = useState(initialValue);
+    const cancelled = useRef(false);
+
+    const handleKeyDown = (e) => {
+        if (e.key === 'Escape') { cancelled.current = true; e.currentTarget.blur(); }
+        else if (e.key === 'Enter' && !multiline) { e.preventDefault(); e.currentTarget.blur(); }
+    };
+
+    // Every way of finishing (Enter, Escape, clicking away) ends up here exactly once.
+    const handleBlur = () => {
+        const text = value.trim();
+        if (!cancelled.current && (text || multiline) && text !== initialValue) onSave(text);
+        onDone();
+    };
+
+    return <Field autoFocus value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={handleKeyDown} onBlur={handleBlur} {...props} />;
+};
+
 const Button = ({ className, variant = "default", size = "default", ...props }) => {
     const baseStyle = "inline-flex items-center justify-center whitespace-nowrap rounded-lg text-sm font-medium ring-offset-neutral-950 transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-700 disabled:pointer-events-none disabled:opacity-50";
     const variants = {
@@ -244,7 +282,6 @@ const Button = ({ className, variant = "default", size = "default", ...props }) 
 const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, onDelete, onEdit, themeColor, glowColor, inputPlaceholder, className = "" }) => {
     const [inputValue, setInputValue] = useState('');
     const [editingId, setEditingId] = useState(null);
-    const [editValue, setEditValue] = useState('');
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -290,9 +327,9 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, on
                             </button>
 
                             {editingId === item.id ? (
-                                <input autoFocus type="text" value={editValue} onChange={(e) => setEditValue(e.target.value)} onBlur={() => { if (editValue.trim() !== item.text) onEdit(item.id, editValue.trim()); setEditingId(null); }} onKeyDown={(e) => { if (e.key === 'Enter') { if (editValue.trim() !== item.text) onEdit(item.id, editValue.trim()); setEditingId(null); } }} className="flex-1 bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-0.5 focus:border-white transition-colors" />
+                                <InlineEditor type="text" initialValue={item.text} onSave={(text) => onEdit(item.id, text)} onDone={() => setEditingId(null)} className="flex-1 bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-0.5 focus:border-white transition-colors" />
                             ) : (
-                                <span onClick={() => { setEditingId(item.id); setEditValue(item.text); }} className="text-sm text-neutral-300 leading-relaxed pt-0.5 flex-1 cursor-text hover:text-white transition-colors transform group-hover/item:translate-x-1 duration-300" title="Click to edit">
+                                <span onClick={() => setEditingId(item.id)} className="text-sm text-neutral-300 leading-relaxed pt-0.5 flex-1 cursor-text hover:text-white transition-colors transform group-hover/item:translate-x-1 duration-300" title="Click to edit">
                                     {item.text}
                                 </span>
                             )}
@@ -317,17 +354,10 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
     const [isEditingNew, setIsEditingNew] = useState(false);
     const [newInputValue, setNewInputValue] = useState('');
     const [isEditingExisting, setIsEditingExisting] = useState(false);
-    const [existingInputValue, setExistingInputValue] = useState('');
 
     const handleAddNew = (e) => {
         e.preventDefault();
         if (newInputValue.trim()) { onAdd(category.id, newInputValue.trim()); setNewInputValue(''); setIsEditingNew(false); }
-    };
-
-    const handleEditExisting = (e) => {
-        e.preventDefault();
-        if (existingInputValue.trim() && existingInputValue.trim() !== item.text) onEdit(category.id, existingInputValue.trim());
-        setIsEditingExisting(false);
     };
 
     if (item) {
@@ -342,12 +372,12 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
                 </div>
 
                 {isEditingExisting ? (
-                    <form onSubmit={handleEditExisting} className="mt-auto mb-2 relative z-20">
-                        <Input autoFocus value={existingInputValue} onChange={(e) => setExistingInputValue(e.target.value)} onBlur={handleEditExisting} className="h-8 text-xs bg-neutral-950 border-neutral-700/80 focus-visible:ring-purple-500 w-full" />
-                    </form>
+                    <div className="mt-auto mb-2 relative z-20">
+                        <InlineEditor as={Input} initialValue={item.text} onSave={(text) => onEdit(category.id, text)} onDone={() => setIsEditingExisting(false)} className="h-8 text-xs bg-neutral-950 border-neutral-700/80 focus-visible:ring-purple-500 w-full" />
+                    </div>
                 ) : (
                     <>
-                        <p onClick={() => { setExistingInputValue(item.text); setIsEditingExisting(true); }} className="text-sm text-white font-medium leading-relaxed cursor-text relative z-10 hover:text-purple-200 transition-colors" title="Click to edit">
+                        <p onClick={() => setIsEditingExisting(true)} className="text-sm text-white font-medium leading-relaxed cursor-text relative z-10 hover:text-purple-200 transition-colors" title="Click to edit">
                             {item.text}
                         </p>
                         <div className="absolute bottom-3 right-3 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-20">
@@ -373,7 +403,7 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
 
             {isEditingNew ? (
                 <form onSubmit={handleAddNew} className="mt-auto relative z-20">
-                    <Input autoFocus value={newInputValue} onChange={(e) => setNewInputValue(e.target.value)} onBlur={() => !newInputValue && setIsEditingNew(false)} placeholder="Draft a memory..." className="h-8 text-xs bg-neutral-900/80 focus-visible:ring-neutral-600" />
+                    <Input autoFocus value={newInputValue} onChange={(e) => setNewInputValue(e.target.value)} onBlur={() => !newInputValue && setIsEditingNew(false)} onKeyDown={(e) => { if (e.key === 'Escape') { setNewInputValue(''); setIsEditingNew(false); } }} placeholder="Draft a memory..." className="h-8 text-xs bg-neutral-900/80 focus-visible:ring-neutral-600" />
                 </form>
             ) : (
                 <div className="mt-auto group cursor-pointer relative z-10" onClick={() => setIsEditingNew(true)}>
@@ -391,20 +421,10 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
 };
 
 const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
-    const [editingId, setEditingId] = useState(null);
-    const [editValue, setEditValue] = useState('');
+    const [isEditingTitle, setIsEditingTitle] = useState(false);
     const [hoverRating, setHoverRating] = useState(0);
     const [isEditingComment, setIsEditingComment] = useState(false);
-    const [comment, setComment] = useState(movie.comment || '');
     const [toggleConfirm, setToggleConfirm] = useState(false);
-
-    useEffect(() => setComment(movie.comment || ''), [movie.comment]);
-
-    const handleSaveComment = (e) => {
-        if (e) e.preventDefault();
-        if (comment.trim() !== (movie.comment || '')) onUpdate(movie.id, { comment: comment.trim() });
-        setIsEditingComment(false);
-    };
 
     const handleToggleClick = () => {
         if (movie.watched && ((movie.rating && movie.rating > 0) || (movie.comment && movie.comment.trim() !== ''))) {
@@ -429,10 +449,10 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
                     <span className="absolute -top-6 left-0 text-[10px] font-bold text-red-400 bg-neutral-900 px-2 py-1 rounded shadow-lg border border-red-500/20 whitespace-nowrap z-20 animate-in fade-in slide-in-from-bottom-2">WIPE & RESTORE?</span>
                 )}
 
-                {editingId === movie.id ? (
-                    <input autoFocus type="text" value={editValue} onChange={(e) => setEditValue(e.target.value)} onBlur={() => { if (editValue.trim() !== movie.title) onEdit(movie.id, editValue.trim()); setEditingId(null); }} onKeyDown={(e) => { if (e.key === 'Enter') { if (editValue.trim() !== movie.title) onEdit(movie.id, editValue.trim()); setEditingId(null); } }} className="flex-1 bg-transparent border-b border-indigo-400 text-sm text-white outline-none pb-0.5" />
+                {isEditingTitle ? (
+                    <InlineEditor type="text" initialValue={movie.title} onSave={(title) => onEdit(movie.id, title)} onDone={() => setIsEditingTitle(false)} className="flex-1 bg-transparent border-b border-indigo-400 text-sm text-white outline-none pb-0.5" />
                 ) : (
-                    <span onClick={() => { setEditingId(movie.id); setEditValue(movie.title); }} className={`text-sm leading-tight flex-1 cursor-text transition-all ${movie.watched ? 'text-neutral-600 line-through' : 'text-neutral-200 hover:text-white'}`} title="Click to edit">
+                    <span onClick={() => setIsEditingTitle(true)} className={`text-sm leading-tight flex-1 cursor-text transition-all ${movie.watched ? 'text-neutral-600 line-through' : 'text-neutral-200 hover:text-white'}`} title="Click to edit">
                         {movie.title}
                     </span>
                 )}
@@ -456,9 +476,9 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
                             })}
                         </div>
                         {isEditingComment ? (
-                            <form onSubmit={handleSaveComment} className="mt-1">
-                                <AutoTextarea autoFocus value={comment} onChange={e => setComment(e.target.value)} onBlur={handleSaveComment} placeholder="What did you think?" className="w-full bg-transparent border-b border-indigo-400/50 text-xs text-indigo-300 outline-none pb-1 font-serif italic leading-relaxed" />
-                            </form>
+                            <div className="mt-1">
+                                <InlineEditor multiline initialValue={movie.comment || ''} onSave={(comment) => onUpdate(movie.id, { comment })} onDone={() => setIsEditingComment(false)} placeholder="What did you think?" className="w-full bg-transparent border-b border-indigo-400/50 text-xs text-indigo-300 outline-none pb-1 font-serif italic leading-relaxed" />
+                            </div>
                         ) : (
                             <p onClick={() => setIsEditingComment(true)} className={`text-xs mt-0.5 cursor-text transition-colors font-serif italic ${movie.comment ? 'text-indigo-300 hover:text-indigo-200' : 'text-neutral-600 hover:text-neutral-400'}`}>
                                 {movie.comment || "Add a review..."}
@@ -474,14 +494,7 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
 const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
     const [hoverRating, setHoverRating] = useState(0);
     const [isEditing, setIsEditing] = useState(false);
-    const [comment, setComment] = useState(item.comment || '');
     const [restoreConfirm, setRestoreConfirm] = useState(false);
-
-    const handleSaveComment = (e) => {
-        if (e) e.preventDefault();
-        if (comment.trim() !== (item.comment || '')) onUpdate(item.id, { comment: comment.trim() });
-        setIsEditing(false);
-    };
 
     const handleRestoreClick = () => {
         if ((item.rating && item.rating > 0) || (item.comment && item.comment.trim() !== '')) {
@@ -525,7 +538,7 @@ const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
                         <Icon name="undo" size={12} />
                         {restoreConfirm && <span className="text-[10px] font-bold uppercase tracking-wider">WIPE & RESTORE?</span>}
                     </Button>
-                    <span className="text-[10px] font-mono font-medium text-neutral-500 bg-neutral-950/80 px-2.5 py-1 rounded-md border border-neutral-800/80 whitespace-nowrap tracking-tight">{item.date}</span>
+                    <span className="text-[10px] font-mono font-medium text-neutral-500 bg-neutral-950/80 px-2.5 py-1 rounded-md border border-neutral-800/80 whitespace-nowrap tracking-tight">{memoryDate(item)}</span>
                 </div>
             </div>
 
@@ -541,9 +554,7 @@ const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
                     })}
                 </div>
                 {isEditing ? (
-                    <form onSubmit={handleSaveComment}>
-                        <AutoTextarea autoFocus value={comment} onChange={e => setComment(e.target.value)} onBlur={handleSaveComment} placeholder="Write a memory..." className="w-full bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-1 font-serif italic leading-relaxed focus:border-white" />
-                    </form>
+                    <InlineEditor multiline initialValue={item.comment || ''} onSave={(comment) => onUpdate(item.id, { comment })} onDone={() => setIsEditing(false)} placeholder="Write a memory..." className="w-full bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-1 font-serif italic leading-relaxed focus:border-white" />
                 ) : (
                     <p onClick={() => setIsEditing(true)} className={`text-sm cursor-text transition-colors font-serif italic ${item.comment ? 'text-neutral-400 hover:text-neutral-200' : 'text-neutral-600 hover:text-neutral-400'}`}>
                         {item.comment || "Add a memory or note..."}
@@ -594,7 +605,7 @@ const PrintCard = ({ item, cardRef }) => (
                             </div>
                         )}
                         <div style={{ marginTop: '36px', fontSize: '10px', letterSpacing: '2px', color: '#8a8270' }}>
-                            {item.date} &nbsp;·&nbsp; ANK &amp; AMY
+                            {memoryDate(item, { alwaysYear: true })} &nbsp;·&nbsp; ANK &amp; AMY
                         </div>
                     </div>
                 </>
@@ -709,7 +720,7 @@ const AccessDenied = ({ email, onSignOut }) => (
     </GateCard>
 );
 
-const LockScreen = ({ passcode, onUnlock }) => {
+const LockScreen = ({ passcode, loadError, onUnlock }) => {
     const [code, setCode] = useState('');
     const [error, setError] = useState(false);
     const loading = passcode === null;
@@ -734,7 +745,7 @@ const LockScreen = ({ passcode, onUnlock }) => {
                     autoFocus
                     value={code}
                     onChange={(e) => setCode(e.target.value)}
-                    placeholder={loading ? "Loading…" : "Enter code"}
+                    placeholder={loadError ? "Couldn't load" : loading ? "Loading…" : "Enter code"}
                     disabled={loading}
                     className={`text-center tracking-[0.3em] bg-neutral-900/50 mb-4 ${error ? 'border-red-500/60' : 'border-neutral-800/80'}`}
                 />
@@ -742,6 +753,7 @@ const LockScreen = ({ passcode, onUnlock }) => {
                     Enter
                 </Button>
                 {error && <p className="text-[11px] text-red-400 mt-4">That's not it — try again.</p>}
+                {loadError && <p className="text-[11px] text-red-400 mt-4">Couldn't reach the database — check your connection and reload the page.</p>}
             </form>
         </GateCard>
     );
@@ -778,7 +790,34 @@ export default function MemoryBook() {
     const [backupStatus, setBackupStatus] = useState('');
     const fileInputRef = useRef(null);
 
+    const [passcodeError, setPasscodeError] = useState(false);
+    const [toast, setToast] = useState(null);
+    const toastTimer = useRef(null);
+
     const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
+    const docRef = (colName, id) => doc(db, 'artifacts', appId, 'public', 'data', colName, id);
+
+    const showToast = (text, tone = 'error') => {
+        clearTimeout(toastTimer.current);
+        setToast({ text, tone });
+        toastTimer.current = setTimeout(() => setToast(null), 5000);
+    };
+    useEffect(() => () => clearTimeout(toastTimer.current), []);
+
+    // Runs a database write and says so if it fails, instead of failing silently. Also catches
+    // errors Firestore throws straight away, before anything is sent (like an invalid value).
+    const run = async (action) => {
+        try { await action(); }
+        catch (err) {
+            console.error(err);
+            showToast("Couldn't save that — check your connection and try again.");
+        }
+    };
+
+    const handleLoadError = (err) => {
+        console.error(err);
+        showToast("Couldn't load everything — try reloading the page.");
+    };
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -813,6 +852,7 @@ export default function MemoryBook() {
         if (!user) return;
         const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'access');
         const unsub = onSnapshot(configRef, (snap) => {
+            setPasscodeError(false);
             if (snap.exists()) {
                 setPasscode(snap.data().passcode ?? '');
             } else {
@@ -822,7 +862,7 @@ export default function MemoryBook() {
             // The security rules only let our two accounts read anything, so this means
             // someone signed in with a Google account that isn't ours.
             if (err.code === 'permission-denied') setAccessDenied(true);
-            else console.error('Could not load passcode:', err);
+            else { console.error('Could not load passcode:', err); setPasscodeError(true); }
         });
         return () => unsub();
     }, [user]);
@@ -845,52 +885,77 @@ export default function MemoryBook() {
 
     useEffect(() => {
         if (!user || !unlocked || accessDenied) return;
-        const unsubAnk = onSnapshot(getColRef('ankItems'), snap => setAnkItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)));
-        const unsubAmy = onSnapshot(getColRef('amyItems'), snap => setAmyItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)));
+        const unsubAnk = onSnapshot(getColRef('ankItems'), snap => setAnkItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)), handleLoadError);
+        const unsubAmy = onSnapshot(getColRef('amyItems'), snap => setAmyItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)), handleLoadError);
         const unsubMovies = onSnapshot(getColRef('movies'), snap => {
             const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             items.sort((a, b) => a.watched === b.watched ? (b.createdAt || 0) - (a.createdAt || 0) : a.watched ? 1 : -1);
             setMovies(items);
-        });
+        }, handleLoadError);
         const unsubShared = onSnapshot(getColRef('sharedItems'), snap => {
             const items = {}; snap.docs.forEach(doc => { items[doc.id] = { id: doc.id, ...doc.data() }; });
             setSharedItems(items);
-        });
-        const unsubArchive = onSnapshot(getColRef('archivedItems'), snap => setArchivedItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => b.createdAt - a.createdAt)));
-        const unsubVault = onSnapshot(getColRef('ideaVault'), snap => setIdeaVault(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)));
+        }, handleLoadError);
+        const unsubArchive = onSnapshot(getColRef('archivedItems'), snap => setArchivedItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => b.createdAt - a.createdAt)), handleLoadError);
+        const unsubVault = onSnapshot(getColRef('ideaVault'), snap => setIdeaVault(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)), handleLoadError);
         return () => { unsubAnk(); unsubAmy(); unsubMovies(); unsubShared(); unsubArchive(); unsubVault(); };
     }, [user, unlocked, accessDenied]);
 
-    const handleAddPersonal = async (board, text) => {
-        if (!user) return;
-        await addDoc(getColRef(board === 'ank' ? 'ankItems' : 'amyItems'), { text, date: new Date().toISOString(), createdAt: Date.now() });
-    };
+    const handleAddPersonal = (board, text) =>
+        run(() => addDoc(getColRef(BOARD_COLLECTIONS[board]), { text, date: new Date().toISOString(), createdAt: Date.now() }));
 
-    const handleCompletePersonal = async (board, item) => {
-        if (!user) return;
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', board === 'ank' ? 'ankItems' : 'amyItems', item.id));
-        await addDoc(getColRef('archivedItems'), { text: item.text, category: board === 'ank' ? "Ank's Orbit" : "Amy's Orbit", date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase(), source: board, createdAt: Date.now() });
-    };
+    // Moving between lists is always one batch: removing from one place and adding to the other
+    // happen together, so a dropped connection can't lose the item or leave it in both.
+    const moveItem = (fromRef, toColName, data) => run(() => {
+        const batch = writeBatch(db);
+        batch.set(doc(getColRef(toColName)), data);
+        batch.delete(fromRef);
+        return batch.commit();
+    });
 
-    const handleCompleteShared = async (categoryId, item) => {
-        if (!user) return;
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', categoryId));
+    const archiveItem = (fromRef, fields) =>
+        moveItem(fromRef, 'archivedItems', { ...fields, date: formatDay(Date.now(), true), createdAt: Date.now() });
+
+    const handleCompletePersonal = (board, item) =>
+        archiveItem(docRef(BOARD_COLLECTIONS[board], item.id), { text: item.text, category: board === 'ank' ? "Ank's Orbit" : "Amy's Orbit", source: board });
+
+    const handleCompleteShared = (categoryId, item) => {
         const category = CATEGORIES.find(c => c.id === categoryId);
-        await addDoc(getColRef('archivedItems'), { text: item.text, category: category ? category.label : 'SHARED', date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase(), source: 'shared', createdAt: Date.now() });
+        return archiveItem(docRef('sharedItems', categoryId), { text: item.text, category: category ? category.label : 'SHARED', categoryId, source: 'shared' });
     };
 
-    const handleRestore = async (item) => {
-        if (!user) return;
+    // Fills a shared slot inside a transaction, so if you both fill the same slot at the same
+    // moment, nobody's entry gets overwritten. If the slot is taken by then, the text goes to the
+    // Dream Vault instead — unless it came from the vault, where it just stays. `moveFrom` (the
+    // vault idea or archived memory being moved) is removed in the same step.
+    const placeInSharedSlot = (categoryId, text, { moveFrom = null, fromVault = false, createdAt = Date.now() } = {}) => run(async () => {
+        const outcome = await runTransaction(db, async (tx) => {
+            const slotRef = docRef('sharedItems', categoryId);
+            const taken = (await tx.get(slotRef)).exists();
+            if (taken && fromVault) return 'kept';
+            if (taken) tx.set(doc(getColRef('ideaVault')), { text, createdAt: Date.now() });
+            else tx.set(slotRef, { text, date: new Date().toISOString(), createdAt });
+            if (moveFrom) tx.delete(moveFrom);
+            return taken ? 'vault' : 'slot';
+        });
+        if (outcome === 'vault') showToast('That slot was already filled, so this went to the Dream Vault instead.', 'notice');
+        if (outcome === 'kept') showToast('That slot was just filled — the idea is still in the Dream Vault.', 'notice');
+    });
+
+    const handleRestore = (item) => {
+        const archivedRef = docRef('archivedItems', item.id);
         if (item.source === 'ank' || item.source === 'amy') {
-            await addDoc(getColRef(item.source === 'ank' ? 'ankItems' : 'amyItems'), { text: item.text, date: new Date().toISOString(), createdAt: item.createdAt || Date.now() });
-        } else if (item.source === 'shared') {
-            const category = CATEGORIES.find(c => c.label === item.category);
-            if (category) {
-                if (sharedItems[category.id]) await addDoc(getColRef('ideaVault'), { text: item.text, createdAt: Date.now() });
-                else await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', category.id), { text: item.text, date: new Date().toISOString(), createdAt: item.createdAt || Date.now() });
-            }
+            return moveItem(archivedRef, BOARD_COLLECTIONS[item.source], { text: item.text, date: new Date().toISOString(), createdAt: item.createdAt || Date.now() });
         }
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', item.id));
+        // Newer memories remember their category's id; older ones only have its display name.
+        const category = CATEGORIES.find(c => c.id === item.categoryId) || CATEGORIES.find(c => c.label === item.category);
+        if (item.source === 'shared' && category) {
+            return placeInSharedSlot(category.id, item.text, { moveFrom: archivedRef, createdAt: item.createdAt || Date.now() });
+        }
+        // Can't tell where it came from (e.g. an imported memory): keep it safe in the Dream Vault
+        // rather than deleting it.
+        showToast("Couldn't tell which board this came from, so it went to the Dream Vault.", 'notice');
+        return moveItem(archivedRef, 'ideaVault', { text: item.text, createdAt: Date.now() });
     };
 
     const handlePrint = async (item) => {
@@ -933,8 +998,8 @@ export default function MemoryBook() {
             kind: 'constellations-backup',
             version: 1,
             exportedAt: new Date().toISOString(),
-            items: archivedItems.map(({ id, text, category, date, source, comment, rating, createdAt }) => ({
-                id, text, category, date, source, comment: comment || '', rating: rating || 0, createdAt: createdAt || null,
+            items: archivedItems.map(({ id, text, category, categoryId, date, source, comment, rating, createdAt }) => ({
+                id, text, category, categoryId: categoryId || '', date, source, comment: comment || '', rating: rating || 0, createdAt: createdAt || null,
             })),
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'text/plain' });
@@ -972,7 +1037,7 @@ export default function MemoryBook() {
                 const memory = sanitizeImportedMemory(raw);
                 if (!memory) { invalid++; continue; }
                 if (memory.id && existingIds.has(memory.id)) { skipped++; continue; }
-                if (memory.id) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', memory.id), memory.data);
+                if (memory.id) await setDoc(docRef('archivedItems', memory.id), memory.data);
                 else await addDoc(getColRef('archivedItems'), memory.data);
                 if (memory.id) existingIds.add(memory.id);
                 imported++;
@@ -1005,7 +1070,7 @@ export default function MemoryBook() {
     const gate = !authReady ? <div className="min-h-screen" />
         : !user ? <SignInScreen />
         : accessDenied ? <AccessDenied email={user.email} onSignOut={handleSignOut} />
-        : !unlocked ? <LockScreen passcode={passcode} onUnlock={handleUnlock} />
+        : !unlocked ? <LockScreen passcode={passcode} loadError={passcodeError} onUnlock={handleUnlock} />
         : null;
 
     return (
@@ -1204,8 +1269,8 @@ export default function MemoryBook() {
                         items={ankItems}
                         onAdd={(text) => handleAddPersonal('ank', text)}
                         onComplete={(item) => handleCompletePersonal('ank', item)}
-                        onDelete={(itemId) => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ankItems', itemId))}
-                        onEdit={(itemId, text) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ankItems', itemId), { text })}
+                        onDelete={(itemId) => run(() => deleteDoc(docRef('ankItems', itemId)))}
+                        onEdit={(itemId, text) => run(() => updateDoc(docRef('ankItems', itemId), { text }))}
                     />
 
                     <SpotlightCard spotlightColor="rgba(45, 212, 191, 0.1)" className="order-1 lg:order-2 bg-neutral-950/80 border border-neutral-800/80 rounded-3xl p-8 lg:p-10 flex flex-col relative shadow-2xl backdrop-blur-xl">
@@ -1219,10 +1284,10 @@ export default function MemoryBook() {
                                 {CATEGORIES.map((category) => (
                                     <CategorySlot
                                         key={category.id} category={category} item={sharedItems[category.id]}
-                                        onAdd={(id, text) => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', id), { text, date: new Date().toISOString(), createdAt: Date.now() })}
+                                        onAdd={(id, text) => placeInSharedSlot(id, text)}
                                         onComplete={handleCompleteShared}
-                                        onDelete={(id) => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', id))}
-                                        onEdit={(id, text) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', id), { text })}
+                                        onDelete={(id) => run(() => deleteDoc(docRef('sharedItems', id)))}
+                                        onEdit={(id, text) => run(() => updateDoc(docRef('sharedItems', id), { text }))}
                                     />
                                 ))}
                             </div>
@@ -1237,8 +1302,8 @@ export default function MemoryBook() {
                         items={amyItems}
                         onAdd={(text) => handleAddPersonal('amy', text)}
                         onComplete={(item) => handleCompletePersonal('amy', item)}
-                        onDelete={(itemId) => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'amyItems', itemId))}
-                        onEdit={(itemId, text) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'amyItems', itemId), { text })}
+                        onDelete={(itemId) => run(() => deleteDoc(docRef('amyItems', itemId)))}
+                        onEdit={(itemId, text) => run(() => updateDoc(docRef('amyItems', itemId), { text }))}
                     />
                 </section>
 
@@ -1255,7 +1320,7 @@ export default function MemoryBook() {
                             <h2 className="text-4xl font-serif text-white tracking-tight">Movies Vault</h2>
                         </div>
 
-                        <form onSubmit={(e) => { e.preventDefault(); if (movieInput.trim()) { addDoc(getColRef('movies'), { title: movieInput.trim(), watched: false, createdAt: Date.now() }); setMovieInput(''); } }} className="flex gap-2 w-full md:w-auto relative group">
+                        <form onSubmit={(e) => { e.preventDefault(); if (movieInput.trim()) { run(() => addDoc(getColRef('movies'), { title: movieInput.trim(), watched: false, createdAt: Date.now() })); setMovieInput(''); } }} className="flex gap-2 w-full md:w-auto relative group">
                             <Input value={movieInput} onChange={(e) => setMovieInput(e.target.value)} placeholder="Add a movie..." className="md:w-[300px] bg-neutral-900/80 border-neutral-800 focus-visible:ring-indigo-500" />
                             <button type="submit" disabled={!movieInput.trim()} className="h-10 px-4 rounded-lg flex items-center justify-center bg-indigo-500 text-white hover:bg-indigo-400 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)]">
                                 <Icon name="plus" size={16} />
@@ -1267,10 +1332,10 @@ export default function MemoryBook() {
                         {movies.map(movie => (
                             <MovieItem
                                 key={movie.id} movie={movie}
-                                onToggle={(m) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', m.id), { watched: !m.watched, rating: m.watched ? null : m.rating, comment: m.watched ? '' : m.comment })}
-                                onDelete={(id) => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', id))}
-                                onEdit={(id, title) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', id), { title })}
-                                onUpdate={(id, updates) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', id), updates)}
+                                onToggle={(m) => run(() => updateDoc(docRef('movies', m.id), m.watched ? { watched: false, rating: null, comment: '' } : { watched: true }))}
+                                onDelete={(id) => run(() => deleteDoc(docRef('movies', id)))}
+                                onEdit={(id, title) => run(() => updateDoc(docRef('movies', id), { title }))}
+                                onUpdate={(id, updates) => run(() => updateDoc(docRef('movies', id), updates))}
                             />
                         ))}
                         {movies.length === 0 && <div className="col-span-full text-sm text-neutral-500 italic text-center py-12 border border-dashed border-neutral-800/50 rounded-2xl">The cinematic universe is empty.</div>}
@@ -1346,7 +1411,7 @@ export default function MemoryBook() {
                                             <ArchivedItem
                                                 key={item.id} item={item}
                                                 onRestore={handleRestore}
-                                                onUpdate={(id, updates) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', id), updates)}
+                                                onUpdate={(id, updates) => run(() => updateDoc(docRef('archivedItems', id), updates))}
                                                 onPrint={handlePrint}
                                             />
                                         ))}
@@ -1372,7 +1437,7 @@ export default function MemoryBook() {
                         </div>
 
                         <div className="p-8 flex-1 overflow-y-auto custom-scrollbar">
-                            <form onSubmit={(e) => { e.preventDefault(); const val = e.target.elements.idea.value.trim(); if (val) { addDoc(getColRef('ideaVault'), { text: val, createdAt: Date.now() }); e.target.reset(); } }} className="mb-8 flex gap-3">
+                            <form onSubmit={(e) => { e.preventDefault(); const val = e.target.elements.idea.value.trim(); if (val) { run(() => addDoc(getColRef('ideaVault'), { text: val, createdAt: Date.now() })); e.target.reset(); } }} className="mb-8 flex gap-3">
                                 <Input name="idea" placeholder="Drop a new idea..." className="bg-neutral-900/50 border-neutral-800" />
                                 <button type="submit" className="h-10 px-4 shrink-0 rounded-lg flex items-center justify-center bg-purple-500 text-white hover:bg-purple-400 transition-all shadow-[0_0_15px_rgba(168,85,247,0.3)]">
                                     <Icon name="plus" size={16} />
@@ -1384,15 +1449,15 @@ export default function MemoryBook() {
                                     <SpotlightCard key={item.id} spotlightColor="rgba(255,255,255,0.05)" className="bg-neutral-900/40 border border-neutral-800/80 rounded-2xl p-5 group card-enter">
                                         <p className="text-sm text-neutral-200 mb-5 leading-relaxed">{item.text}</p>
                                         <div className="flex flex-wrap gap-2">
-                                            <Button variant="outline" size="sm" onClick={() => { addDoc(getColRef('ankItems'), { text: item.text, date: new Date().toISOString(), createdAt: Date.now() }); deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ideaVault', item.id)); }} className="h-8 text-xs bg-neutral-950/50 gap-2 border-indigo-500/20 hover:border-indigo-500/50 hover:text-indigo-300 rounded-lg"><Icon name="moon" size={12} /> Ank</Button>
-                                            <Button variant="outline" size="sm" onClick={() => { addDoc(getColRef('amyItems'), { text: item.text, date: new Date().toISOString(), createdAt: Date.now() }); deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ideaVault', item.id)); }} className="h-8 text-xs bg-neutral-950/50 gap-2 border-amber-500/20 hover:border-amber-500/50 hover:text-amber-300 rounded-lg"><Icon name="sun" size={12} /> Amy</Button>
+                                            <Button variant="outline" size="sm" onClick={() => moveItem(docRef('ideaVault', item.id), 'ankItems', { text: item.text, date: new Date().toISOString(), createdAt: Date.now() })} className="h-8 text-xs bg-neutral-950/50 gap-2 border-indigo-500/20 hover:border-indigo-500/50 hover:text-indigo-300 rounded-lg"><Icon name="moon" size={12} /> Ank</Button>
+                                            <Button variant="outline" size="sm" onClick={() => moveItem(docRef('ideaVault', item.id), 'amyItems', { text: item.text, date: new Date().toISOString(), createdAt: Date.now() })} className="h-8 text-xs bg-neutral-950/50 gap-2 border-amber-500/20 hover:border-amber-500/50 hover:text-amber-300 rounded-lg"><Icon name="sun" size={12} /> Amy</Button>
                                             <div className="relative group/dropdown">
                                                 <Button variant="outline" size="sm" className="h-8 text-xs border-cyan-400/30 text-cyan-400 bg-cyan-400/5 gap-2 rounded-lg hover:bg-cyan-400/10"><Icon name="sparkles" size={12} /> Shared</Button>
                                                 <div className="absolute top-full right-0 mt-2 w-48 bg-neutral-900/95 backdrop-blur-xl border border-neutral-700/50 rounded-xl shadow-2xl opacity-0 invisible group-hover/dropdown:opacity-100 group-hover/dropdown:visible transition-all z-20 p-1.5 transform origin-top-right scale-95 group-hover/dropdown:scale-100">
                                                     {CATEGORIES.map(cat => {
                                                         const isFull = !!sharedItems[cat.id];
                                                         return (
-                                                            <button key={cat.id} disabled={isFull} onClick={() => { setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', cat.id), { text: item.text, date: new Date().toISOString(), createdAt: Date.now() }); deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ideaVault', item.id)); }} className="w-full text-left px-3 py-2.5 text-xs text-neutral-300 hover:bg-neutral-800 hover:text-white rounded-lg disabled:opacity-30 flex justify-between items-center transition-colors">
+                                                            <button key={cat.id} disabled={isFull} onClick={() => placeInSharedSlot(cat.id, item.text, { moveFrom: docRef('ideaVault', item.id), fromVault: true })} className="w-full text-left px-3 py-2.5 text-xs text-neutral-300 hover:bg-neutral-800 hover:text-white rounded-lg disabled:opacity-30 flex justify-between items-center transition-colors">
                                                                 {cat.label} {isFull && <Icon name="lock" size={12} />}
                                                             </button>
                                                         );
@@ -1406,6 +1471,13 @@ export default function MemoryBook() {
                             </div>
                         </div>
                     </div>
+                </div>
+            )}
+
+            {/* Save errors and notices, e.g. "that slot was just filled" */}
+            {toast && (
+                <div role="status" aria-live="polite" className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] w-max max-w-[calc(100%-2rem)] px-4 py-2.5 rounded-2xl border text-xs leading-relaxed text-center shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 ${toast.tone === 'error' ? 'bg-red-950/80 border-red-500/30 text-red-200' : 'bg-neutral-900/90 border-white/10 text-neutral-200'}`}>
+                    {toast.text}
                 </div>
             )}
             </>
