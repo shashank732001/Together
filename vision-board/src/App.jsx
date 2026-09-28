@@ -93,6 +93,33 @@ const CATEGORIES = [
     { id: 'culture', label: 'CULTURE', sub: 'Finding beauty in the universe around us.', iconName: 'culture' }
 ];
 
+const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+const ARCHIVE_SOURCES = ['ank', 'amy', 'shared'];
+const cleanString = (value, maxLength) => (typeof value === 'string' ? value.trim().slice(0, maxLength) : '');
+
+// Rebuilds one memory from a backup file using only the fields an export writes, with the
+// right types, so a hand-edited or corrupted file can't break the page or write odd data.
+// Returns null for entries that aren't usable memories.
+const sanitizeImportedMemory = (raw) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const text = cleanString(raw.text, 5000);
+    if (!text) return null;
+    return {
+        // Keep the original ID only if it looks like a Firestore auto-ID; anything else (e.g. with
+        // "/" in it) could point the write at a different place in the database.
+        id: typeof raw.id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(raw.id) ? raw.id : null,
+        data: {
+            text,
+            category: cleanString(raw.category, 100) || 'MEMORY',
+            date: cleanString(raw.date, 40),
+            source: ARCHIVE_SOURCES.includes(raw.source) ? raw.source : '',
+            comment: cleanString(raw.comment, 50000),
+            rating: Number.isInteger(raw.rating) && raw.rating >= 0 && raw.rating <= 5 ? raw.rating : 0,
+            createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : null,
+        },
+    };
+};
+
 const SpotlightCard = ({ children, className = "", spotlightColor = "rgba(255,255,255,0.08)" }) => {
     const divRef = useRef(null);
     const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -527,6 +554,10 @@ const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
     );
 };
 
+// For the few places we build raw HTML strings (the print window): makes memory text show as
+// text instead of being run as markup.
+const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
 // Always mounted off-screen; content updates from `item` and gets captured to a PNG on demand.
 // A light, print-friendly design on purpose — the dark UI card would waste ink on a B&W printer.
 const PrintCard = ({ item, cardRef }) => (
@@ -877,7 +908,7 @@ export default function MemoryBook() {
             const dataUrl = await toPng(printCardRef.current, { pixelRatio: 3, backgroundColor: '#faf7f0' });
             printWin.document.open();
             printWin.document.write(`
-                <html><head><title>${(item.text || 'Memory').slice(0, 60)}</title>
+                <html><head><title>${escapeHtml((item.text || 'Memory').slice(0, 60))}</title>
                 <style>
                     @page { size: auto; margin: 10mm; }
                     html, body { margin: 0; padding: 0; height: 100%; background: #fff; }
@@ -921,23 +952,37 @@ export default function MemoryBook() {
         const file = e.target.files?.[0];
         e.target.value = '';
         if (!file || !user) return;
+        const unreadable = "Could not read that file — make sure it's a backup exported from this site.";
+        let items;
         try {
+            if (file.size > MAX_IMPORT_BYTES) throw new Error('File too large');
             const payload = JSON.parse(await file.text());
-            const items = Array.isArray(payload.items) ? payload.items : Array.isArray(payload) ? payload : null;
-            if (!items) throw new Error('Unrecognized backup format');
+            items = Array.isArray(payload?.items) ? payload.items : Array.isArray(payload) ? payload : null;
+        } catch { items = null; }
+        if (!items) {
+            setBackupStatus(unreadable);
+            setTimeout(() => setBackupStatus(''), 5000);
+            return;
+        }
 
-            const existingIds = new Set(archivedItems.map(i => i.id));
-            let imported = 0, skipped = 0;
+        const existingIds = new Set(archivedItems.map(i => i.id));
+        let imported = 0, skipped = 0, invalid = 0;
+        try {
             for (const raw of items) {
-                const { id, ...data } = raw;
-                if (id && existingIds.has(id)) { skipped++; continue; }
-                if (id) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', id), data);
-                else await addDoc(getColRef('archivedItems'), data);
+                const memory = sanitizeImportedMemory(raw);
+                if (!memory) { invalid++; continue; }
+                if (memory.id && existingIds.has(memory.id)) { skipped++; continue; }
+                if (memory.id) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', memory.id), memory.data);
+                else await addDoc(getColRef('archivedItems'), memory.data);
+                if (memory.id) existingIds.add(memory.id);
                 imported++;
             }
-            setBackupStatus(`Restored ${imported} memor${imported === 1 ? 'y' : 'ies'}${skipped ? `, skipped ${skipped} already here` : ''}.`);
+            const notes = [skipped && `skipped ${skipped} already here`, invalid && `ignored ${invalid} unreadable`].filter(Boolean);
+            setBackupStatus(imported === 0 && skipped === 0
+                ? unreadable
+                : `Restored ${imported} memor${imported === 1 ? 'y' : 'ies'}${notes.length ? `, ${notes.join(', ')}` : ''}.`);
         } catch {
-            setBackupStatus("Could not read that file — make sure it's a backup exported from this site.");
+            setBackupStatus(`Restored ${imported} before something went wrong — import the same file again to finish (ones already here are skipped).`);
         }
         setTimeout(() => setBackupStatus(''), 5000);
     };
@@ -945,7 +990,7 @@ export default function MemoryBook() {
     const getMonthYear = (timestamp) => timestamp ? new Date(timestamp).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : 'Unknown Date';
     const availableMonths = [...new Set(archivedItems.map(item => getMonthYear(item.createdAt)))];
     const filteredArchive = archivedItems.filter(item => {
-        const searchMatch = !archiveSearch || item.text.toLowerCase().includes(archiveSearch.toLowerCase()) || (item.comment && item.comment.toLowerCase().includes(archiveSearch.toLowerCase()));
+        const searchMatch = !archiveSearch || String(item.text || '').toLowerCase().includes(archiveSearch.toLowerCase()) || (typeof item.comment === 'string' && item.comment.toLowerCase().includes(archiveSearch.toLowerCase()));
         const ratingMatch = archiveRating === 0 || (archiveRating === -1 && !item.rating) || (archiveRating > 0 && item.rating === archiveRating);
         const monthMatch = archiveMonth === 'all' || getMonthYear(item.createdAt) === archiveMonth;
         return searchMatch && ratingMatch && monthMatch;
