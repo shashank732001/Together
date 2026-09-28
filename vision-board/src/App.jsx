@@ -199,7 +199,7 @@ const TimeTogether = ({ startDate }) => {
     if (!isStarted) return null;
 
     return (
-        <SpotlightCard spotlightColor="rgba(204, 255, 0, 0.15)" className="inline-flex items-center rounded-full border border-[#ccff00]/10 bg-neutral-950/60 shadow-2xl backdrop-blur-xl mb-10 w-fit max-w-full p-1">
+        <SpotlightCard spotlightColor="rgba(204, 255, 0, 0.15)" className="inline-flex items-center rounded-full border border-[#ccff00]/10 bg-neutral-950/60 shadow-2xl backdrop-blur-xl mb-8 md:mb-10 w-fit max-w-full p-1">
             <div className="flex items-center gap-1 sm:gap-2 px-2.5 sm:px-4 py-2 bg-[#ccff00]/10 rounded-full shrink-0">
                 <Icon name="sparkles" size={14} className="text-[#ccff00] shrink-0" />
                 <span className="text-[9px] sm:text-[11px] font-bold tracking-[0.1em] sm:tracking-[0.2em] text-[#ccff00] uppercase whitespace-nowrap">TOGETHER FOR</span>
@@ -248,23 +248,72 @@ const AutoTextarea = ({ className = '', value, ...props }) => {
 // then, so it always starts from the latest saved version (including your partner's changes).
 // Clicking away saves (so does Enter on single-line fields), Escape cancels, and single-line
 // fields never save a blank value — the old text is kept instead. Notes can be cleared.
+// Notes (multiline) also get Save / Cancel buttons: on iPhones, tapping outside a text box often
+// doesn't leave it, and there's no Escape key.
 const InlineEditor = ({ initialValue, onSave, onDone, multiline = false, as: Field = multiline ? AutoTextarea : 'input', ...props }) => {
     const [value, setValue] = useState(initialValue);
     const cancelled = useRef(false);
+    const finished = useRef(false);
 
-    const handleKeyDown = (e) => {
-        if (e.key === 'Escape') { cancelled.current = true; e.currentTarget.blur(); }
-        else if (e.key === 'Enter' && !multiline) { e.preventDefault(); e.currentTarget.blur(); }
-    };
-
-    // Every way of finishing (Enter, Escape, clicking away) ends up here exactly once.
-    const handleBlur = () => {
+    // Every way of finishing (Enter, Escape, clicking away, the buttons) ends up here; only the first counts.
+    const finish = (save) => {
+        if (finished.current) return;
+        finished.current = true;
         const text = value.trim();
-        if (!cancelled.current && (text || multiline) && text !== initialValue) onSave(text);
+        if (save && (text || multiline) && text !== initialValue) onSave(text);
         onDone();
     };
 
-    return <Field autoFocus value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={handleKeyDown} onBlur={handleBlur} {...props} />;
+    const handleKeyDown = (e) => {
+        if (e.key === 'Escape') { cancelled.current = true; finish(false); }
+        else if (e.key === 'Enter' && !multiline) { e.preventDefault(); finish(true); }
+    };
+
+    const field = <Field autoFocus value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={handleKeyDown} onBlur={() => finish(!cancelled.current)} enterKeyHint={multiline ? undefined : 'done'} {...props} />;
+    if (!multiline) return field;
+
+    // preventDefault on mousedown keeps the text box focused, so tapping a button doesn't first
+    // count as "clicking away". Cancel also sets its flag on pointerdown, in case the browser moves
+    // focus anyway; a touch that turns into a scroll (pointercancel) clears it again.
+    const keepFocus = (e) => e.preventDefault();
+    return (
+        <div>
+            {field}
+            <div className="flex justify-end gap-2 mt-2">
+                <button type="button" onPointerDown={() => { cancelled.current = true; }} onPointerCancel={() => { cancelled.current = false; }} onMouseDown={keepFocus} onClick={() => finish(false)} className="h-8 px-3 rounded-lg text-xs text-neutral-400 hover:text-white hover:bg-white/5 transition-colors">
+                    Cancel
+                </button>
+                <button type="button" onMouseDown={keepFocus} onClick={() => finish(true)} className="h-8 px-3.5 rounded-lg text-xs font-medium bg-white/10 text-white hover:bg-white/20 transition-colors">
+                    Save
+                </button>
+            </div>
+        </div>
+    );
+};
+
+// Tap a star to rate; tap the same star again to clear it. Stars get bigger tap targets on phones.
+// The hover preview only follows a real mouse — after a tap on a touch screen it would stay stuck.
+const StarRating = ({ value = 0, onChange, size = 12, emptyClassName = 'text-neutral-700' }) => {
+    const [hover, setHover] = useState(0);
+    return (
+        <div className="flex items-center -mx-1.5 sm:-mx-0.5" role="group" aria-label="Rating">
+            {[1, 2, 3, 4, 5].map(star => {
+                const isFilled = (hover || value || 0) >= star;
+                return (
+                    <button
+                        key={star} type="button"
+                        aria-label={value === star ? `Clear the ${star}-star rating` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                        onPointerEnter={(e) => { if (e.pointerType === 'mouse') setHover(star); }}
+                        onPointerLeave={() => setHover(0)}
+                        onClick={() => { setHover(0); onChange(value === star ? 0 : star); }}
+                        className={`p-1.5 sm:p-0.5 transition-transform can-hover:hover:scale-110 ${isFilled ? 'text-[#ccff00] drop-shadow-[0_0_4px_rgba(204,255,0,0.4)]' : emptyClassName}`}
+                    >
+                        <Icon name={isFilled ? 'starFilled' : 'star'} size={size} className="max-sm:w-[18px] max-sm:h-[18px]" />
+                    </button>
+                );
+            })}
+        </div>
+    );
 };
 
 const Button = ({ className, variant = "default", size = "default", ...props }) => {
@@ -289,9 +338,9 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, on
     };
 
     return (
-        <SpotlightCard spotlightColor={glowColor} className={`flex flex-col h-full bg-neutral-950/80 border border-neutral-800/60 rounded-3xl p-6 md:p-8 shadow-2xl backdrop-blur-md group ${className}`}>
+        <SpotlightCard spotlightColor={glowColor} className={`flex flex-col h-full bg-neutral-950/80 border border-neutral-800/60 rounded-3xl p-5 sm:p-6 md:p-8 shadow-2xl backdrop-blur-md group ${className}`}>
             <div className="relative z-10 flex flex-col h-full">
-                <div className="mb-8">
+                <div className="mb-6 md:mb-8">
                     <div className="flex items-center gap-2 mb-3 opacity-80">
                         <div className="p-1.5 rounded-md bg-neutral-900 border border-neutral-800/50">
                             <Icon name={iconName} size={14} style={{ color: themeColor }} className="animate-pulse" />
@@ -315,11 +364,12 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, on
                     </button>
                 </form>
 
-                <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar min-h-[250px]">
+                <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar min-h-[96px] lg:min-h-[250px]">
                     {items.map(item => (
                         <div key={item.id} className="group/item flex items-start gap-3 p-3.5 bg-neutral-900/40 hover:bg-neutral-800/50 border border-transparent hover:border-neutral-700/50 rounded-xl transition-all duration-300 relative card-enter">
                             <button
                                 onClick={() => onComplete(item)}
+                                aria-label="Mark as done"
                                 className="mt-0.5 flex-shrink-0 w-5 h-5 rounded-full border border-neutral-600 hover:border-transparent flex items-center justify-center transition-all relative overflow-hidden bg-neutral-950"
                             >
                                 <div className="absolute inset-0 opacity-0 group-hover/item:opacity-100 transition-opacity" style={{ backgroundColor: themeColor }} />
@@ -334,13 +384,13 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, on
                                 </span>
                             )}
 
-                            <button onClick={() => onDelete(item.id)} className="opacity-0 group-hover/item:opacity-100 p-1.5 text-neutral-500 hover:text-red-400 hover:bg-red-400/10 rounded-md transition-all">
+                            <button onClick={() => onDelete(item.id)} aria-label="Delete" className="can-hover:opacity-0 can-hover:group-hover/item:opacity-100 focus-visible:opacity-100 p-2 sm:p-1.5 -my-0.5 text-neutral-500 hover:text-red-400 hover:bg-red-400/10 rounded-md transition-all">
                                 <Icon name="trash" size={14} />
                             </button>
                         </div>
                     ))}
                     {items.length === 0 && (
-                        <div className="text-xs text-neutral-600 text-center mt-12 py-10 border border-dashed border-neutral-800/50 rounded-2xl">
+                        <div className="text-xs text-neutral-600 text-center mt-2 py-6 lg:mt-12 lg:py-10 border border-dashed border-neutral-800/50 rounded-2xl">
                             Quiet orbit. No pending memories.
                         </div>
                     )}
@@ -362,7 +412,7 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
 
     if (item) {
         return (
-            <SpotlightCard spotlightColor="rgba(192, 132, 252, 0.15)" className="relative group bg-neutral-900/60 border border-purple-500/20 rounded-2xl p-5 flex flex-col justify-between transition-all hover:border-purple-500/40 min-h-[140px] card-enter">
+            <SpotlightCard spotlightColor="rgba(192, 132, 252, 0.15)" className="relative group bg-neutral-900/60 border border-purple-500/20 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between transition-all hover:border-purple-500/40 min-h-[96px] sm:min-h-[140px] card-enter">
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2">
                         <Icon name={category.iconName} size={14} className="text-purple-400" />
@@ -380,11 +430,12 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
                         <p onClick={() => setIsEditingExisting(true)} className="text-sm text-white font-medium leading-relaxed cursor-text relative z-10 hover:text-purple-200 transition-colors" title="Click to edit">
                             {item.text}
                         </p>
-                        <div className="absolute bottom-3 right-3 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                            <Button variant="ghost" size="icon" className="h-7 w-7 text-neutral-400 hover:text-red-400 hover:bg-red-400/10 bg-neutral-900/80 backdrop-blur-md" onClick={() => onDelete(category.id)}>
+                        {/* Mouse: floats over the card on hover. Touch: its own row under the text, always visible. */}
+                        <div className="flex justify-end gap-1.5 mt-3 z-20 can-hover:mt-0 can-hover:absolute can-hover:bottom-3 can-hover:right-3 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                            <Button variant="ghost" size="icon" aria-label={`Delete from ${category.label.toLowerCase()}`} className="h-8 w-8 sm:h-7 sm:w-7 text-neutral-400 hover:text-red-400 hover:bg-red-400/10 bg-neutral-900/80 backdrop-blur-md" onClick={() => onDelete(category.id)}>
                                 <Icon name="trash" size={14} />
                             </Button>
-                            <Button variant="outline" size="icon" className="h-7 w-7 border-[#ccff00]/30 text-[#ccff00] hover:bg-[#ccff00] hover:text-neutral-950 bg-neutral-900/80 backdrop-blur-md" onClick={() => onComplete(category.id, item)}>
+                            <Button variant="outline" size="icon" aria-label="Mark as done" className="h-8 w-8 sm:h-7 sm:w-7 border-[#ccff00]/30 text-[#ccff00] hover:bg-[#ccff00] hover:text-neutral-950 bg-neutral-900/80 backdrop-blur-md" onClick={() => onComplete(category.id, item)}>
                                 <Icon name="check" size={14} />
                             </Button>
                         </div>
@@ -395,7 +446,7 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
     }
 
     return (
-        <div className="bg-neutral-950/30 border border-dashed border-neutral-800 rounded-2xl p-5 flex flex-col justify-between transition-all hover:border-neutral-600 hover:bg-neutral-900/50 min-h-[140px]">
+        <div onClick={() => { if (!isEditingNew) setIsEditingNew(true); }} className={`bg-neutral-950/30 border border-dashed border-neutral-800 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between transition-all hover:border-neutral-600 hover:bg-neutral-900/50 min-h-[96px] sm:min-h-[140px] ${isEditingNew ? '' : 'cursor-pointer group'}`}>
             <div className="flex items-center gap-2 mb-2">
                 <Icon name={category.iconName} size={14} className="text-neutral-600" />
                 <span className="text-[10px] tracking-widest font-bold text-neutral-600 uppercase">{category.label}</span>
@@ -406,13 +457,14 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
                     <Input autoFocus value={newInputValue} onChange={(e) => setNewInputValue(e.target.value)} onBlur={() => !newInputValue && setIsEditingNew(false)} onKeyDown={(e) => { if (e.key === 'Escape') { setNewInputValue(''); setIsEditingNew(false); } }} placeholder="Draft a memory..." className="h-8 text-xs bg-neutral-900/80 focus-visible:ring-neutral-600" />
                 </form>
             ) : (
-                <div className="mt-auto group cursor-pointer relative z-10" onClick={() => setIsEditingNew(true)}>
-                    <p className="text-[11px] text-neutral-500 mb-2 group-hover:text-neutral-300 transition-colors">Add to orbit...</p>
-                    <div className="flex items-center justify-between">
-                        <p className="text-[10px] text-neutral-600 font-serif italic max-w-[80%] leading-snug">{category.sub}</p>
-                        <div className="w-6 h-6 rounded-full bg-neutral-900/80 group-hover:bg-neutral-800 flex items-center justify-center text-neutral-500 group-hover:text-purple-400 transition-colors">
-                            <Icon name="plus" size={12} />
-                        </div>
+                <div className="mt-auto flex items-end justify-between gap-2 relative z-10">
+                    <div>
+                        <p className="text-[11px] text-neutral-500 sm:mb-2 group-hover:text-neutral-300 transition-colors">Add to orbit...</p>
+                        {/* The tagline is dropped on phones, where slots sit two per row. */}
+                        <p className="hidden sm:block text-[10px] text-neutral-600 font-serif italic leading-snug">{category.sub}</p>
+                    </div>
+                    <div className="w-6 h-6 shrink-0 rounded-full bg-neutral-900/80 group-hover:bg-neutral-800 flex items-center justify-center text-neutral-500 group-hover:text-purple-400 transition-colors">
+                        <Icon name="plus" size={12} />
                     </div>
                 </div>
             )}
@@ -422,7 +474,6 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
 
 const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
     const [isEditingTitle, setIsEditingTitle] = useState(false);
-    const [hoverRating, setHoverRating] = useState(0);
     const [isEditingComment, setIsEditingComment] = useState(false);
     const [toggleConfirm, setToggleConfirm] = useState(false);
 
@@ -442,7 +493,7 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
     return (
         <div className={`flex flex-col gap-1.5 p-3.5 rounded-xl border transition-all duration-300 group card-enter ${movie.watched ? 'bg-neutral-900/20 border-neutral-800/40' : 'bg-neutral-900/60 border-neutral-800 hover:border-indigo-500/30 hover:shadow-[0_0_15px_rgba(99,102,241,0.05)]'}`}>
             <div className="flex items-center gap-3 relative">
-                <button onClick={handleToggleClick} className={`flex-shrink-0 w-5 h-5 rounded border flex items-center justify-center transition-all ${movie.watched ? (toggleConfirm ? 'bg-red-500 border-red-500 text-white' : 'bg-indigo-400 border-indigo-400 text-neutral-950 shadow-[0_0_10px_rgba(129,140,248,0.3)]') : 'border-neutral-600 text-transparent hover:border-indigo-400 hover:text-indigo-400/50'}`}>
+                <button onClick={handleToggleClick} aria-label={movie.watched ? "Mark as not watched" : "Mark as watched"} className={`flex-shrink-0 w-5 h-5 rounded border flex items-center justify-center transition-all ${movie.watched ? (toggleConfirm ? 'bg-red-500 border-red-500 text-white' : 'bg-indigo-400 border-indigo-400 text-neutral-950 shadow-[0_0_10px_rgba(129,140,248,0.3)]') : 'border-neutral-600 text-transparent hover:border-indigo-400 hover:text-indigo-400/50'}`}>
                     <Icon name="check" size={12} className="currentColor" />
                 </button>
                 {toggleConfirm && movie.watched && (
@@ -457,7 +508,7 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
                     </span>
                 )}
 
-                <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-400 hover:bg-red-400/10" onClick={() => onDelete(movie.id)}>
+                <Button variant="ghost" size="icon" aria-label="Delete movie" className="h-8 w-8 sm:h-7 sm:w-7 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 text-neutral-500 hover:text-red-400 hover:bg-red-400/10" onClick={() => onDelete(movie.id)}>
                     <Icon name="trash" size={14} />
                 </Button>
             </div>
@@ -465,22 +516,13 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
             {movie.watched && (
                 <div className="pl-8 pr-8 mt-1 mb-1 animate-in fade-in slide-in-from-top-2 duration-300">
                     <div className="flex flex-col gap-2 bg-neutral-950/40 rounded-lg p-3 border border-neutral-800/50">
-                        <div className="flex items-center gap-1">
-                            {[1, 2, 3, 4, 5].map(star => {
-                                const isFilled = (hoverRating || movie.rating || 0) >= star;
-                                return (
-                                    <button key={star} onMouseEnter={() => setHoverRating(star)} onMouseLeave={() => setHoverRating(0)} onClick={() => onUpdate(movie.id, { rating: star })} className={`transition-transform hover:scale-110 ${isFilled ? 'text-[#ccff00] drop-shadow-[0_0_4px_rgba(204,255,0,0.4)]' : 'text-neutral-700'}`}>
-                                        <Icon name={isFilled ? "starFilled" : "star"} size={14} />
-                                    </button>
-                                );
-                            })}
-                        </div>
+                        <StarRating value={movie.rating} onChange={(rating) => onUpdate(movie.id, { rating })} size={14} />
                         {isEditingComment ? (
                             <div className="mt-1">
                                 <InlineEditor multiline initialValue={movie.comment || ''} onSave={(comment) => onUpdate(movie.id, { comment })} onDone={() => setIsEditingComment(false)} placeholder="What did you think?" className="w-full bg-transparent border-b border-indigo-400/50 text-xs text-indigo-300 outline-none pb-1 font-serif italic leading-relaxed" />
                             </div>
                         ) : (
-                            <p onClick={() => setIsEditingComment(true)} className={`text-xs mt-0.5 cursor-text transition-colors font-serif italic ${movie.comment ? 'text-indigo-300 hover:text-indigo-200' : 'text-neutral-600 hover:text-neutral-400'}`}>
+                            <p onClick={() => setIsEditingComment(true)} className={`text-xs mt-0.5 py-1 cursor-text transition-colors font-serif italic whitespace-pre-wrap break-words ${movie.comment ? 'text-indigo-300 hover:text-indigo-200' : 'text-neutral-500 hover:text-neutral-300'}`}>
                                 {movie.comment || "Add a review..."}
                             </p>
                         )}
@@ -492,7 +534,6 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
 };
 
 const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
-    const [hoverRating, setHoverRating] = useState(0);
     const [isEditing, setIsEditing] = useState(false);
     const [restoreConfirm, setRestoreConfirm] = useState(false);
 
@@ -522,18 +563,20 @@ const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
                     <Button
                         variant="ghost"
                         size="icon"
-                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-all bg-neutral-950/50 text-neutral-500 hover:text-white hover:bg-white/10"
+                        className="h-8 w-8 sm:h-7 sm:w-7 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 transition-all bg-neutral-950/50 text-neutral-500 hover:text-white hover:bg-white/10"
                         onClick={() => onPrint(item)}
                         title="Print this memory"
+                        aria-label="Print this memory"
                     >
                         <Icon name="printer" size={12} />
                     </Button>
                     <Button
                         variant="ghost"
                         size="sm"
-                        className={`h-7 opacity-0 group-hover:opacity-100 transition-all bg-neutral-950/50 flex items-center gap-1 px-2 ${restoreConfirm ? 'text-red-400 hover:bg-red-400/20' : 'text-neutral-500 hover:text-white hover:bg-white/10'}`}
+                        className={`h-8 sm:h-7 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 transition-all bg-neutral-950/50 flex items-center gap-1 px-2 ${restoreConfirm ? 'text-red-400 hover:bg-red-400/20' : 'text-neutral-500 hover:text-white hover:bg-white/10'}`}
                         onClick={handleRestoreClick}
                         title="Restore to board"
+                        aria-label={restoreConfirm ? "Tap again to restore (clears rating and note)" : "Restore to board"}
                     >
                         <Icon name="undo" size={12} />
                         {restoreConfirm && <span className="text-[10px] font-bold uppercase tracking-wider">WIPE & RESTORE?</span>}
@@ -543,20 +586,13 @@ const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
             </div>
 
             <div className="pl-8">
-                <div className="flex items-center gap-1 mb-2">
-                    {[1, 2, 3, 4, 5].map(star => {
-                        const isFilled = (hoverRating || item.rating || 0) >= star;
-                        return (
-                            <button key={star} onMouseEnter={() => setHoverRating(star)} onMouseLeave={() => setHoverRating(0)} onClick={() => onUpdate(item.id, { rating: star })} className={`transition-transform hover:scale-110 ${isFilled ? 'text-[#ccff00] drop-shadow-[0_0_4px_rgba(204,255,0,0.4)]' : 'text-neutral-800 hover:text-neutral-600'}`}>
-                                <Icon name={isFilled ? "starFilled" : "star"} size={12} />
-                            </button>
-                        );
-                    })}
+                <div className="mb-1 sm:mb-2">
+                    <StarRating value={item.rating} onChange={(rating) => onUpdate(item.id, { rating })} emptyClassName="text-neutral-700 can-hover:hover:text-neutral-500" />
                 </div>
                 {isEditing ? (
                     <InlineEditor multiline initialValue={item.comment || ''} onSave={(comment) => onUpdate(item.id, { comment })} onDone={() => setIsEditing(false)} placeholder="Write a memory..." className="w-full bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-1 font-serif italic leading-relaxed focus:border-white" />
                 ) : (
-                    <p onClick={() => setIsEditing(true)} className={`text-sm cursor-text transition-colors font-serif italic ${item.comment ? 'text-neutral-400 hover:text-neutral-200' : 'text-neutral-600 hover:text-neutral-400'}`}>
+                    <p onClick={() => setIsEditing(true)} className={`text-sm py-1 cursor-text transition-colors font-serif italic whitespace-pre-wrap break-words ${item.comment ? 'text-neutral-400 hover:text-neutral-200' : 'text-neutral-500 hover:text-neutral-300'}`}>
                         {item.comment || "Add a memory or note..."}
                     </p>
                 )}
@@ -600,7 +636,7 @@ const PrintCard = ({ item, cardRef }) => (
                             “{item.text}”
                         </div>
                         {item.comment && (
-                            <div style={{ fontFamily: "'Playfair Display', serif", fontStyle: 'italic', fontSize: '17px', lineHeight: 1.6, color: '#4a4438', borderTop: '1px solid #c9c2b3', paddingTop: '22px', marginTop: '28px' }}>
+                            <div style={{ fontFamily: "'Playfair Display', serif", fontStyle: 'italic', fontSize: '17px', lineHeight: 1.6, color: '#4a4438', borderTop: '1px solid #c9c2b3', paddingTop: '22px', marginTop: '28px', whiteSpace: 'pre-wrap' }}>
                                 {item.comment}
                             </div>
                         )}
@@ -778,6 +814,7 @@ export default function MemoryBook() {
     const [ideaVault, setIdeaVault] = useState([]);
 
     const [isVaultOpen, setIsVaultOpen] = useState(false);
+    const [sharedMenuFor, setSharedMenuFor] = useState(null); // vault idea whose category list is open
     const [movieInput, setMovieInput] = useState('');
 
     const [archiveSearch, setArchiveSearch] = useState('');
@@ -797,10 +834,11 @@ export default function MemoryBook() {
     const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
     const docRef = (colName, id) => doc(db, 'artifacts', appId, 'public', 'data', colName, id);
 
-    const showToast = (text, tone = 'error') => {
+    // `action` adds a button to the message, e.g. { label: 'Undo', onClick }.
+    const showToast = (text, tone = 'error', action = null) => {
         clearTimeout(toastTimer.current);
-        setToast({ text, tone });
-        toastTimer.current = setTimeout(() => setToast(null), 5000);
+        setToast({ text, tone, action });
+        toastTimer.current = setTimeout(() => setToast(null), action ? 7000 : 5000);
     };
     useEffect(() => () => clearTimeout(toastTimer.current), []);
 
@@ -817,6 +855,16 @@ export default function MemoryBook() {
     const handleLoadError = (err) => {
         console.error(err);
         showToast("Couldn't load everything — try reloading the page.");
+    };
+
+    // Deleting is instant, so offer an Undo for a few seconds — an easy slip on a phone.
+    // `restore` puts it back; by default the same document is written again with its old data.
+    const deleteWithUndo = (colName, item, restore = (id, data) => run(() => setDoc(docRef(colName, id), data))) => {
+        if (!item) return;
+        const { id, ...data } = item;
+        const pending = deleteDoc(docRef(colName, id));
+        showToast('Deleted.', 'notice', { label: 'Undo', onClick: () => restore(id, data) });
+        return run(() => pending);
     };
 
     useEffect(() => {
@@ -882,6 +930,21 @@ export default function MemoryBook() {
             clearInterval(interval);
         };
     }, [unlocked]);
+
+    // Dream Vault drawer: Escape closes it, and the page behind doesn't scroll while it's open
+    // (on phones, swiping inside the drawer would otherwise scroll the board underneath).
+    useEffect(() => {
+        if (!isVaultOpen) return;
+        setSharedMenuFor(null);
+        const onKeyDown = (e) => { if (e.key === 'Escape') setIsVaultOpen(false); };
+        window.addEventListener('keydown', onKeyDown);
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            window.removeEventListener('keydown', onKeyDown);
+            document.body.style.overflow = previousOverflow;
+        };
+    }, [isVaultOpen]);
 
     useEffect(() => {
         if (!user || !unlocked || accessDenied) return;
@@ -1135,6 +1198,12 @@ export default function MemoryBook() {
           animation: card-enter 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
         }
 
+        /* Phones set to "Reduce motion": keep the sky still (also easier on the battery). */
+        @media (prefers-reduced-motion: reduce) {
+          .bg-aurora, .bg-star-layer, .card-enter, .animate-in, .animate-pulse { animation: none !important; }
+          .meteor-shower { display: none; }
+        }
+
         .bg-aurora {
           background-image: 
             radial-gradient(ellipse at 80% 0%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
@@ -1225,35 +1294,36 @@ export default function MemoryBook() {
             <>
             {/* Top Navigation */}
             <nav className="border-b border-white/5 bg-[#02040a]/40 backdrop-blur-2xl sticky top-0 z-40">
-                <div className="max-w-[1400px] mx-auto px-6 h-14 flex items-center justify-between">
+                <div className="max-w-[1400px] mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
                         <div className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-neutral-800 to-neutral-900 border border-white/10 flex items-center justify-center shadow-inner">
                             <Icon name="sparkles" size={14} className="text-white" />
                         </div>
-                        <span className="text-[11px] font-bold tracking-[0.2em] text-neutral-300">{"ANK & AMY'S MEMORY BOOK"}</span>
+                        <span className="text-[10px] sm:text-[11px] leading-snug font-bold tracking-[0.15em] sm:tracking-[0.2em] text-neutral-300">{"ANK & AMY'S MEMORY BOOK"}</span>
                     </div>
                     <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" onClick={() => setIsVaultOpen(true)} className="gap-2 text-neutral-300 border-white/10 rounded-full px-4">
+                        <Button variant="outline" size="sm" onClick={() => setIsVaultOpen(true)} aria-label="Open Dream Vault" className="gap-2 text-neutral-300 border-white/10 rounded-full px-3 min-[380px]:px-4 shrink-0">
                             <Icon name="sparkles" size={12} className="text-purple-400" />
-                            Dream Vault
+                            {/* Narrow phones: icon + count only, so the title keeps its room. */}
+                            <span className="max-[379px]:sr-only">Dream Vault</span>
                             {ideaVault.length > 0 && <span className="bg-white/10 text-white px-1.5 py-0.5 rounded text-[10px] leading-none ml-1">{ideaVault.length}</span>}
                         </Button>
-                        <Button variant="outline" size="icon" onClick={handleSignOut} className="text-neutral-400 border-white/10 rounded-full" title={`Sign out${user?.email ? ` (${user.email})` : ''}`} aria-label="Sign out">
+                        <Button variant="outline" size="icon" onClick={handleSignOut} className="shrink-0 text-neutral-400 border-white/10 rounded-full" title={`Sign out${user?.email ? ` (${user.email})` : ''}`} aria-label="Sign out">
                             <Icon name="logOut" size={14} />
                         </Button>
                     </div>
                 </div>
             </nav>
 
-            <main className="max-w-[1400px] w-full mx-auto px-6 py-16 relative z-10 space-y-24">
+            <main className="max-w-[1400px] w-full mx-auto px-4 sm:px-6 py-10 lg:py-16 relative z-10 space-y-14 lg:space-y-24">
 
                 {/* Hero Section */}
                 <section className="flex flex-col max-w-4xl card-enter">
                     <TimeTogether startDate={START_DATE} />
-                    <h1 className="text-5xl md:text-7xl font-serif tracking-tight text-white leading-[1.1] mb-8">
+                    <h1 className="text-[2.6rem] sm:text-5xl md:text-7xl font-serif tracking-tight text-white leading-[1.1] mb-6 md:mb-8">
                         Two people, <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-400 via-cyan-400 to-indigo-400 animate-pulse">one unfolding universe.</span>
                     </h1>
-                    <p className="text-lg md:text-xl text-neutral-400 font-serif italic leading-relaxed border-l-[3px] border-purple-500/30 pl-6 py-1">
+                    <p className="text-base sm:text-lg md:text-xl text-neutral-400 font-serif italic leading-relaxed border-l-[3px] border-purple-500/30 pl-4 sm:pl-6 py-1">
                         The sun dreams of tomorrow. The moon remembers yesterday.<br />Together, we build today.
                     </p>
                 </section>
@@ -1269,24 +1339,24 @@ export default function MemoryBook() {
                         items={ankItems}
                         onAdd={(text) => handleAddPersonal('ank', text)}
                         onComplete={(item) => handleCompletePersonal('ank', item)}
-                        onDelete={(itemId) => run(() => deleteDoc(docRef('ankItems', itemId)))}
+                        onDelete={(itemId) => deleteWithUndo('ankItems', ankItems.find(i => i.id === itemId))}
                         onEdit={(itemId, text) => run(() => updateDoc(docRef('ankItems', itemId), { text }))}
                     />
 
-                    <SpotlightCard spotlightColor="rgba(45, 212, 191, 0.1)" className="order-1 lg:order-2 bg-neutral-950/80 border border-neutral-800/80 rounded-3xl p-8 lg:p-10 flex flex-col relative shadow-2xl backdrop-blur-xl">
+                    <SpotlightCard spotlightColor="rgba(45, 212, 191, 0.1)" className="order-1 lg:order-2 bg-neutral-950/80 border border-neutral-800/80 rounded-3xl p-4 sm:p-8 lg:p-10 flex flex-col relative shadow-2xl backdrop-blur-xl">
                         <div className="relative z-10 flex flex-col h-full">
-                            <div className="mb-8 text-center">
+                            <div className="mb-5 sm:mb-8 mt-2 sm:mt-0 text-center">
                                 <h2 className="text-3xl lg:text-4xl font-serif text-white tracking-tight">Where our orbits meet.</h2>
                                 <span className="text-[10px] tracking-[0.2em] font-bold text-cyan-400/80 uppercase mt-3 block">THE CENTER OF GRAVITY</span>
                             </div>
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1">
+                            <div className="grid grid-cols-2 gap-2.5 sm:gap-4 flex-1">
                                 {CATEGORIES.map((category) => (
                                     <CategorySlot
                                         key={category.id} category={category} item={sharedItems[category.id]}
                                         onAdd={(id, text) => placeInSharedSlot(id, text)}
                                         onComplete={handleCompleteShared}
-                                        onDelete={(id) => run(() => deleteDoc(docRef('sharedItems', id)))}
+                                        onDelete={(id) => deleteWithUndo('sharedItems', sharedItems[id], (slotId, data) => placeInSharedSlot(slotId, data.text, { createdAt: data.createdAt }))}
                                         onEdit={(id, text) => run(() => updateDoc(docRef('sharedItems', id), { text }))}
                                     />
                                 ))}
@@ -1302,14 +1372,14 @@ export default function MemoryBook() {
                         items={amyItems}
                         onAdd={(text) => handleAddPersonal('amy', text)}
                         onComplete={(item) => handleCompletePersonal('amy', item)}
-                        onDelete={(itemId) => run(() => deleteDoc(docRef('amyItems', itemId)))}
+                        onDelete={(itemId) => deleteWithUndo('amyItems', amyItems.find(i => i.id === itemId))}
                         onEdit={(itemId, text) => run(() => updateDoc(docRef('amyItems', itemId), { text }))}
                     />
                 </section>
 
                 {/* Movies Vault */}
-                <SpotlightCard spotlightColor="rgba(99, 102, 241, 0.1)" className="bg-neutral-950/60 border border-neutral-800/80 rounded-3xl p-6 lg:p-10 backdrop-blur-md">
-                    <div className="relative z-10 flex flex-col md:flex-row md:items-end justify-between mb-10 gap-6">
+                <SpotlightCard spotlightColor="rgba(99, 102, 241, 0.1)" className="bg-neutral-950/60 border border-neutral-800/80 rounded-3xl p-5 sm:p-6 lg:p-10 backdrop-blur-md">
+                    <div className="relative z-10 flex flex-col md:flex-row md:items-end justify-between mb-6 md:mb-10 gap-5 md:gap-6">
                         <div>
                             <div className="flex items-center gap-2 mb-3">
                                 <div className="p-1.5 rounded-md bg-indigo-500/10 border border-indigo-500/20">
@@ -1328,12 +1398,12 @@ export default function MemoryBook() {
                         </form>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[500px] overflow-y-auto custom-scrollbar pr-2 pb-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 md:max-h-[500px] md:overflow-y-auto custom-scrollbar md:pr-2 pb-4">
                         {movies.map(movie => (
                             <MovieItem
                                 key={movie.id} movie={movie}
                                 onToggle={(m) => run(() => updateDoc(docRef('movies', m.id), m.watched ? { watched: false, rating: null, comment: '' } : { watched: true }))}
-                                onDelete={(id) => run(() => deleteDoc(docRef('movies', id)))}
+                                onDelete={(id) => deleteWithUndo('movies', movies.find(m => m.id === id))}
                                 onEdit={(id, title) => run(() => updateDoc(docRef('movies', id), { title }))}
                                 onUpdate={(id, updates) => run(() => updateDoc(docRef('movies', id), updates))}
                             />
@@ -1344,7 +1414,7 @@ export default function MemoryBook() {
 
                 {/* Hall of Fame */}
                 <section className="bg-transparent relative">
-                    <div className="flex flex-col md:flex-row md:items-end justify-between mb-8 gap-6 pb-6">
+                    <div className="flex flex-col md:flex-row md:items-end justify-between mb-6 md:mb-8 gap-5 md:gap-6 md:pb-6">
                         <div>
                             <h2 className="text-4xl lg:text-5xl font-serif text-white tracking-tight">
                                 Our Constellations.
@@ -1370,7 +1440,7 @@ export default function MemoryBook() {
                     )}
 
                     {archivedItems.length > 0 && (
-                        <div className="flex flex-col md:flex-row gap-4 mb-12 p-5 bg-neutral-900/40 backdrop-blur-xl rounded-2xl border border-white/5 shadow-2xl">
+                        <div className="flex flex-col md:flex-row gap-3 md:gap-4 mb-8 md:mb-12 p-4 md:p-5 bg-neutral-900/40 backdrop-blur-xl rounded-2xl border border-white/5 shadow-2xl">
                             <div className="relative flex-1">
                                 <Icon name="search" size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-500" />
                                 <Input type="text" placeholder="Search memories..." value={archiveSearch} onChange={(e) => setArchiveSearch(e.target.value)} className="pl-11 bg-neutral-950/80 border-neutral-800/80 h-11" />
@@ -1393,7 +1463,7 @@ export default function MemoryBook() {
                         </div>
                     )}
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-10">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-8 md:gap-y-10">
                         {Object.keys(groupedArchive).length === 0 ? (
                             <div className="col-span-full text-center py-20 text-neutral-500 border border-dashed border-neutral-800/50 rounded-3xl bg-neutral-900/20 backdrop-blur-sm">
                                 {archivedItems.length === 0 ? "The sky is waiting for its first star." : "No memories found matching your search."}
@@ -1427,16 +1497,16 @@ export default function MemoryBook() {
             {isVaultOpen && (
                 <div className="fixed inset-0 z-50 flex justify-end">
                     <div className="absolute inset-0 bg-neutral-950/60 backdrop-blur-sm transition-opacity" onClick={() => setIsVaultOpen(false)} />
-                    <div className="w-full max-w-md h-full bg-neutral-950/95 border-l border-white/10 relative flex flex-col shadow-2xl animate-in slide-in-from-right duration-300">
-                        <div className="p-8 border-b border-white/5 flex items-center justify-between bg-gradient-to-b from-purple-500/5 to-transparent">
+                    <div role="dialog" aria-modal="true" aria-labelledby="dream-vault-title" className="w-full max-w-md h-full bg-neutral-950/95 border-l border-white/10 relative flex flex-col shadow-2xl animate-in slide-in-from-right duration-300">
+                        <div className="p-6 sm:p-8 border-b border-white/5 flex items-center justify-between bg-gradient-to-b from-purple-500/5 to-transparent">
                             <div>
-                                <h3 className="text-2xl font-serif text-white mb-1">Dream Vault</h3>
+                                <h3 id="dream-vault-title" className="text-2xl font-serif text-white mb-1">Dream Vault</h3>
                                 <p className="text-xs tracking-wide text-purple-300/70 uppercase font-bold">Future Memories & Ideas</p>
                             </div>
-                            <Button variant="ghost" size="icon" onClick={() => setIsVaultOpen(false)} className="text-neutral-400 rounded-full hover:bg-white/10"><Icon name="x" size={20} /></Button>
+                            <Button variant="ghost" size="icon" onClick={() => setIsVaultOpen(false)} aria-label="Close Dream Vault" className="h-10 w-10 text-neutral-400 rounded-full hover:bg-white/10"><Icon name="x" size={20} /></Button>
                         </div>
 
-                        <div className="p-8 flex-1 overflow-y-auto custom-scrollbar">
+                        <div className="p-6 sm:p-8 flex-1 overflow-y-auto overscroll-contain custom-scrollbar">
                             <form onSubmit={(e) => { e.preventDefault(); const val = e.target.elements.idea.value.trim(); if (val) { run(() => addDoc(getColRef('ideaVault'), { text: val, createdAt: Date.now() })); e.target.reset(); } }} className="mb-8 flex gap-3">
                                 <Input name="idea" placeholder="Drop a new idea..." className="bg-neutral-900/50 border-neutral-800" />
                                 <button type="submit" className="h-10 px-4 shrink-0 rounded-lg flex items-center justify-center bg-purple-500 text-white hover:bg-purple-400 transition-all shadow-[0_0_15px_rgba(168,85,247,0.3)]">
@@ -1451,20 +1521,24 @@ export default function MemoryBook() {
                                         <div className="flex flex-wrap gap-2">
                                             <Button variant="outline" size="sm" onClick={() => moveItem(docRef('ideaVault', item.id), 'ankItems', { text: item.text, date: new Date().toISOString(), createdAt: Date.now() })} className="h-8 text-xs bg-neutral-950/50 gap-2 border-indigo-500/20 hover:border-indigo-500/50 hover:text-indigo-300 rounded-lg"><Icon name="moon" size={12} /> Ank</Button>
                                             <Button variant="outline" size="sm" onClick={() => moveItem(docRef('ideaVault', item.id), 'amyItems', { text: item.text, date: new Date().toISOString(), createdAt: Date.now() })} className="h-8 text-xs bg-neutral-950/50 gap-2 border-amber-500/20 hover:border-amber-500/50 hover:text-amber-300 rounded-lg"><Icon name="sun" size={12} /> Amy</Button>
-                                            <div className="relative group/dropdown">
-                                                <Button variant="outline" size="sm" className="h-8 text-xs border-cyan-400/30 text-cyan-400 bg-cyan-400/5 gap-2 rounded-lg hover:bg-cyan-400/10"><Icon name="sparkles" size={12} /> Shared</Button>
-                                                <div className="absolute top-full right-0 mt-2 w-48 bg-neutral-900/95 backdrop-blur-xl border border-neutral-700/50 rounded-xl shadow-2xl opacity-0 invisible group-hover/dropdown:opacity-100 group-hover/dropdown:visible transition-all z-20 p-1.5 transform origin-top-right scale-95 group-hover/dropdown:scale-100">
-                                                    {CATEGORIES.map(cat => {
-                                                        const isFull = !!sharedItems[cat.id];
-                                                        return (
-                                                            <button key={cat.id} disabled={isFull} onClick={() => placeInSharedSlot(cat.id, item.text, { moveFrom: docRef('ideaVault', item.id), fromVault: true })} className="w-full text-left px-3 py-2.5 text-xs text-neutral-300 hover:bg-neutral-800 hover:text-white rounded-lg disabled:opacity-30 flex justify-between items-center transition-colors">
-                                                                {cat.label} {isFull && <Icon name="lock" size={12} />}
-                                                            </button>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
+                                            <Button variant="outline" size="sm" onClick={() => setSharedMenuFor(sharedMenuFor === item.id ? null : item.id)} aria-expanded={sharedMenuFor === item.id} className="h-8 text-xs border-cyan-400/30 text-cyan-400 bg-cyan-400/5 gap-2 rounded-lg hover:bg-cyan-400/10">
+                                                <Icon name="sparkles" size={12} /> Shared
+                                                <Icon name="chevronDown" size={12} className={`transition-transform ${sharedMenuFor === item.id ? 'rotate-180' : ''}`} />
+                                            </Button>
                                         </div>
+                                        {/* Opens on tap (hover menus don't work on phones) and expands inside the card. */}
+                                        {sharedMenuFor === item.id && (
+                                            <div className="grid grid-cols-2 gap-1.5 mt-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                                                {CATEGORIES.map(cat => {
+                                                    const isFull = !!sharedItems[cat.id];
+                                                    return (
+                                                        <button key={cat.id} disabled={isFull} onClick={() => { setSharedMenuFor(null); placeInSharedSlot(cat.id, item.text, { moveFrom: docRef('ideaVault', item.id), fromVault: true }); }} className="text-left px-3 py-2.5 text-[11px] tracking-wide text-neutral-300 bg-neutral-950/50 border border-neutral-800 hover:border-cyan-400/40 hover:text-white rounded-lg disabled:opacity-30 flex justify-between items-center gap-2 transition-colors">
+                                                            {cat.label} {isFull && <Icon name="lock" size={12} className="shrink-0" />}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
                                     </SpotlightCard>
                                 ))}
                                 {ideaVault.length === 0 && <div className="text-center text-neutral-600 text-xs py-12 border border-dashed border-neutral-800/50 rounded-2xl bg-neutral-900/20">The vault is empty.</div>}
@@ -1476,8 +1550,13 @@ export default function MemoryBook() {
 
             {/* Save errors and notices, e.g. "that slot was just filled" */}
             {toast && (
-                <div role="status" aria-live="polite" className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] w-max max-w-[calc(100%-2rem)] px-4 py-2.5 rounded-2xl border text-xs leading-relaxed text-center shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 ${toast.tone === 'error' ? 'bg-red-950/80 border-red-500/30 text-red-200' : 'bg-neutral-900/90 border-white/10 text-neutral-200'}`}>
-                    {toast.text}
+                <div role="status" aria-live="polite" className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] w-max max-w-[calc(100%-2rem)] flex items-center gap-3 px-4 py-2.5 rounded-2xl border text-xs leading-relaxed text-center shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 ${toast.tone === 'error' ? 'bg-red-950/80 border-red-500/30 text-red-200' : 'bg-neutral-900/90 border-white/10 text-neutral-200'}`}>
+                    <span>{toast.text}</span>
+                    {toast.action && (
+                        <button type="button" onClick={() => { const { onClick } = toast.action; clearTimeout(toastTimer.current); setToast(null); onClick(); }} className="h-8 px-3 -my-1 -mr-1.5 rounded-lg text-xs font-semibold text-[#ccff00] hover:bg-white/10 transition-colors">
+                            {toast.action.label}
+                        </button>
+                    )}
                 </div>
             )}
             </>
