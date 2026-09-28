@@ -95,6 +95,15 @@ const CATEGORIES = [
 
 const BOARD_COLLECTIONS = { ank: 'ankItems', amy: 'amyItems' };
 
+// "Who did it": items remember who added them (addedBy) and notes who wrote them (commentBy).
+// Which Google account is which name is picked once in the app and stored in Firestore
+// (config/people), so no account IDs live in the code.
+const PEOPLE = ['Ank', 'Amy'];
+const isPerson = (name) => PEOPLE.includes(name);
+
+// Carries who added an item onto its new copy when it moves between lists.
+const keepAuthor = (item) => (isPerson(item?.addedBy) ? { addedBy: item.addedBy } : {});
+
 const formatDay = (timestamp, withYear) =>
     new Date(timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(withYear && { year: 'numeric' }) }).toUpperCase();
 
@@ -128,6 +137,8 @@ const sanitizeImportedMemory = (raw) => {
             date: cleanString(raw.date, 40),
             source: ARCHIVE_SOURCES.includes(raw.source) ? raw.source : '',
             categoryId: CATEGORIES.some(c => c.id === raw.categoryId) ? raw.categoryId : '',
+            addedBy: isPerson(raw.addedBy) ? raw.addedBy : '',
+            commentBy: isPerson(raw.commentBy) ? raw.commentBy : '',
             comment: cleanString(raw.comment, 50000),
             rating: Number.isInteger(raw.rating) && raw.rating >= 0 && raw.rating <= 5 ? raw.rating : 0,
             createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : null,
@@ -316,6 +327,17 @@ const StarRating = ({ value = 0, onChange, size = 12, emptyClassName = 'text-neu
     );
 };
 
+// Small name bubble, in the colour of that person's orbit.
+const PERSON_TAG_STYLES = {
+    Ank: 'text-indigo-300 border-indigo-400/30 bg-indigo-400/10',
+    Amy: 'text-amber-300 border-amber-400/30 bg-amber-400/10',
+};
+const PersonTag = ({ name, verb = 'Added' }) => (isPerson(name) ? (
+    <span title={`${verb} by ${name}`} className={`inline-flex items-center align-middle ml-1.5 px-1.5 rounded-full border text-[9px] leading-4 font-semibold font-sans not-italic tracking-wide whitespace-nowrap ${PERSON_TAG_STYLES[name]}`}>
+        <span className="sr-only">{verb.toLowerCase()} by </span>{name}
+    </span>
+) : null);
+
 const Button = ({ className, variant = "default", size = "default", ...props }) => {
     const baseStyle = "inline-flex items-center justify-center whitespace-nowrap rounded-lg text-sm font-medium ring-offset-neutral-950 transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-700 disabled:pointer-events-none disabled:opacity-50";
     const variants = {
@@ -380,7 +402,7 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, on
                                 <InlineEditor type="text" initialValue={item.text} onSave={(text) => onEdit(item.id, text)} onDone={() => setEditingId(null)} className="flex-1 bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-0.5 focus:border-white transition-colors" />
                             ) : (
                                 <span onClick={() => setEditingId(item.id)} className="text-sm text-neutral-300 leading-relaxed pt-0.5 flex-1 cursor-text hover:text-white transition-colors transform group-hover/item:translate-x-1 duration-300" title="Click to edit">
-                                    {item.text}
+                                    {item.text}<PersonTag name={item.addedBy} />
                                 </span>
                             )}
 
@@ -428,7 +450,7 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
                 ) : (
                     <>
                         <p onClick={() => setIsEditingExisting(true)} className="text-sm text-white font-medium leading-relaxed cursor-text relative z-10 hover:text-purple-200 transition-colors" title="Click to edit">
-                            {item.text}
+                            {item.text}<PersonTag name={item.addedBy} />
                         </p>
                         {/* Mouse: floats over the card on hover. Touch: its own row under the text, always visible. */}
                         <div className="flex justify-end gap-1.5 mt-3 z-20 can-hover:mt-0 can-hover:absolute can-hover:bottom-3 can-hover:right-3 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
@@ -504,7 +526,7 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
                     <InlineEditor type="text" initialValue={movie.title} onSave={(title) => onEdit(movie.id, title)} onDone={() => setIsEditingTitle(false)} className="flex-1 bg-transparent border-b border-indigo-400 text-sm text-white outline-none pb-0.5" />
                 ) : (
                     <span onClick={() => setIsEditingTitle(true)} className={`text-sm leading-tight flex-1 cursor-text transition-all ${movie.watched ? 'text-neutral-600 line-through' : 'text-neutral-200 hover:text-white'}`} title="Click to edit">
-                        {movie.title}
+                        {movie.title}<PersonTag name={movie.addedBy} />
                     </span>
                 )}
 
@@ -523,7 +545,7 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
                             </div>
                         ) : (
                             <p onClick={() => setIsEditingComment(true)} className={`text-xs mt-0.5 py-1 cursor-text transition-colors font-serif italic whitespace-pre-wrap break-words ${movie.comment ? 'text-indigo-300 hover:text-indigo-200' : 'text-neutral-500 hover:text-neutral-300'}`}>
-                                {movie.comment || "Add a review..."}
+                                {movie.comment || "Add a review..."}{movie.comment && <PersonTag name={movie.commentBy} verb="Written" />}
                             </p>
                         )}
                     </div>
@@ -557,7 +579,7 @@ const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
                     <div className="mt-0.5 w-5 h-5 rounded-full bg-neutral-800/50 border border-neutral-700 flex items-center justify-center flex-shrink-0 shadow-[0_0_10px_rgba(255,255,255,0.05)]">
                         <Icon name="check" size={10} className="text-neutral-400" />
                     </div>
-                    <span className="text-sm font-medium text-neutral-300 leading-snug group-hover:text-white transition-colors">{item.text}</span>
+                    <span className="text-sm font-medium text-neutral-300 leading-snug group-hover:text-white transition-colors">{item.text}<PersonTag name={item.addedBy} /></span>
                 </div>
                 <div className="flex items-center gap-2">
                     <Button
@@ -593,7 +615,7 @@ const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
                     <InlineEditor multiline initialValue={item.comment || ''} onSave={(comment) => onUpdate(item.id, { comment })} onDone={() => setIsEditing(false)} placeholder="Write a memory..." className="w-full bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-1 font-serif italic leading-relaxed focus:border-white" />
                 ) : (
                     <p onClick={() => setIsEditing(true)} className={`text-sm py-1 cursor-text transition-colors font-serif italic whitespace-pre-wrap break-words ${item.comment ? 'text-neutral-400 hover:text-neutral-200' : 'text-neutral-500 hover:text-neutral-300'}`}>
-                        {item.comment || "Add a memory or note..."}
+                        {item.comment || "Add a memory or note..."}{item.comment && <PersonTag name={item.commentBy} verb="Written" />}
                     </p>
                 )}
             </div>
@@ -698,12 +720,12 @@ const CosmicBackground = () => {
 };
 
 // Shared frame for the screens shown before the board: sign-in, no-access and passcode.
-const GateCard = ({ title, subtitle, children }) => (
+const GateCard = ({ title, subtitle, icon = 'lock', children }) => (
     <div className="min-h-screen w-full flex items-center justify-center relative z-10 px-6">
         <SpotlightCard spotlightColor="rgba(204, 255, 0, 0.1)" className="w-full max-w-sm bg-neutral-950/80 border border-neutral-800/80 rounded-3xl p-8 md:p-10 shadow-2xl backdrop-blur-xl">
             <div className="relative z-10 flex flex-col items-center text-center">
                 <div className="p-3 rounded-2xl bg-neutral-900 border border-neutral-800/50 mb-6">
-                    <Icon name="lock" size={22} className="text-[#ccff00]" />
+                    <Icon name={icon} size={22} className="text-[#ccff00]" />
                 </div>
                 <h1 className="text-2xl font-serif text-white tracking-tight mb-2">{title}</h1>
                 <p className="text-xs text-neutral-500 mb-8 leading-relaxed">{subtitle}</p>
@@ -755,6 +777,38 @@ const AccessDenied = ({ email, onSignOut }) => (
         </Button>
     </GateCard>
 );
+
+// Shown once per account, right after the passcode: which of you is this?
+const NamePicker = ({ people, uid, onPick }) => {
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState('');
+    const takenByOther = (name) => Object.entries(people).some(([id, n]) => n === name && id !== uid);
+
+    const pick = async (name) => {
+        setBusy(true);
+        setError('');
+        try {
+            if (!(await onPick(name))) setError(`${name} was just picked on the other account.`);
+        } catch {
+            setError("Couldn't save that — check your connection and try again.");
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <GateCard icon="sparkles" title="Which one are you?" subtitle="Pick once. Your name shows as a little bubble on what you add and the notes you write.">
+            <div className="w-full grid grid-cols-2 gap-3">
+                {PEOPLE.map(name => (
+                    <Button key={name} variant="outline" disabled={busy || takenByOther(name)} onClick={() => pick(name)} className={`h-12 text-sm ${name === 'Ank' ? 'border-indigo-400/30 text-indigo-200 hover:bg-indigo-400/10' : 'border-amber-400/30 text-amber-200 hover:bg-amber-400/10'}`}>
+                        {takenByOther(name) ? `${name} (taken)` : `I'm ${name}`}
+                    </Button>
+                ))}
+            </div>
+            {error && <p className="text-[11px] text-red-400 mt-4">{error}</p>}
+        </GateCard>
+    );
+};
 
 const LockScreen = ({ passcode, loadError, onUnlock }) => {
     const [code, setCode] = useState('');
@@ -828,6 +882,7 @@ export default function MemoryBook() {
     const fileInputRef = useRef(null);
 
     const [passcodeError, setPasscodeError] = useState(false);
+    const [people, setPeople] = useState(null); // { [uid]: 'Ank' | 'Amy' }, null until loaded
     const [toast, setToast] = useState(null);
     const toastTimer = useRef(null);
 
@@ -892,6 +947,7 @@ export default function MemoryBook() {
         try { localStorage.removeItem(ACTIVITY_STORAGE_KEY); } catch { /* ignore storage errors */ }
         setUnlocked(false);
         setPasscode(null);
+        setPeople(null);
         await signOut(auth);
     };
 
@@ -914,6 +970,14 @@ export default function MemoryBook() {
         });
         return () => unsub();
     }, [user]);
+
+    // Which account is Ank and which is Amy (picked once per account in NamePicker).
+    useEffect(() => {
+        if (!user || accessDenied) return;
+        return onSnapshot(docRef('config', 'people'), (snap) => setPeople(snap.exists() ? snap.data() : {}), (err) => {
+            if (err.code !== 'permission-denied') console.error('Could not load names:', err);
+        });
+    }, [user, accessDenied]);
 
     // While unlocked, track activity and auto re-lock after INACTIVITY_LIMIT_MS of idle time.
     useEffect(() => {
@@ -964,8 +1028,23 @@ export default function MemoryBook() {
         return () => { unsubAnk(); unsubAmy(); unsubMovies(); unsubShared(); unsubArchive(); unsubVault(); };
     }, [user, unlocked, accessDenied]);
 
+    const myName = isPerson(people?.[user?.uid]) ? people[user.uid] : null;
+    const byMe = () => (myName ? { addedBy: myName } : {});
+    // Saving a note records who wrote it; clearing the note clears that too.
+    const withNoteAuthor = (updates) => ('comment' in updates ? { ...updates, commentBy: updates.comment ? (myName || '') : '' } : updates);
+
+    // Saves which of you this account is. A transaction, so you can't both grab the same name.
+    // Resolves to false if the other account took it first.
+    const claimName = (name) => runTransaction(db, async (tx) => {
+        const peopleRef = docRef('config', 'people');
+        const current = (await tx.get(peopleRef)).data() || {};
+        if (Object.entries(current).some(([uid, n]) => n === name && uid !== user.uid)) return false;
+        tx.set(peopleRef, { ...current, [user.uid]: name });
+        return true;
+    });
+
     const handleAddPersonal = (board, text) =>
-        run(() => addDoc(getColRef(BOARD_COLLECTIONS[board]), { text, date: new Date().toISOString(), createdAt: Date.now() }));
+        run(() => addDoc(getColRef(BOARD_COLLECTIONS[board]), { text, ...byMe(), date: new Date().toISOString(), createdAt: Date.now() }));
 
     // Moving between lists is always one batch: removing from one place and adding to the other
     // happen together, so a dropped connection can't lose the item or leave it in both.
@@ -980,24 +1059,24 @@ export default function MemoryBook() {
         moveItem(fromRef, 'archivedItems', { ...fields, date: formatDay(Date.now(), true), createdAt: Date.now() });
 
     const handleCompletePersonal = (board, item) =>
-        archiveItem(docRef(BOARD_COLLECTIONS[board], item.id), { text: item.text, category: board === 'ank' ? "Ank's Orbit" : "Amy's Orbit", source: board });
+        archiveItem(docRef(BOARD_COLLECTIONS[board], item.id), { text: item.text, ...keepAuthor(item), category: board === 'ank' ? "Ank's Orbit" : "Amy's Orbit", source: board });
 
     const handleCompleteShared = (categoryId, item) => {
         const category = CATEGORIES.find(c => c.id === categoryId);
-        return archiveItem(docRef('sharedItems', categoryId), { text: item.text, category: category ? category.label : 'SHARED', categoryId, source: 'shared' });
+        return archiveItem(docRef('sharedItems', categoryId), { text: item.text, ...keepAuthor(item), category: category ? category.label : 'SHARED', categoryId, source: 'shared' });
     };
 
     // Fills a shared slot inside a transaction, so if you both fill the same slot at the same
     // moment, nobody's entry gets overwritten. If the slot is taken by then, the text goes to the
     // Dream Vault instead — unless it came from the vault, where it just stays. `moveFrom` (the
-    // vault idea or archived memory being moved) is removed in the same step.
-    const placeInSharedSlot = (categoryId, text, { moveFrom = null, fromVault = false, createdAt = Date.now() } = {}) => run(async () => {
+    // vault idea or archived memory being moved) is removed in the same step. `author` is { addedBy }.
+    const placeInSharedSlot = (categoryId, text, { moveFrom = null, fromVault = false, createdAt = Date.now(), author = {} } = {}) => run(async () => {
         const outcome = await runTransaction(db, async (tx) => {
             const slotRef = docRef('sharedItems', categoryId);
             const taken = (await tx.get(slotRef)).exists();
             if (taken && fromVault) return 'kept';
-            if (taken) tx.set(doc(getColRef('ideaVault')), { text, createdAt: Date.now() });
-            else tx.set(slotRef, { text, date: new Date().toISOString(), createdAt });
+            if (taken) tx.set(doc(getColRef('ideaVault')), { text, ...author, createdAt: Date.now() });
+            else tx.set(slotRef, { text, ...author, date: new Date().toISOString(), createdAt });
             if (moveFrom) tx.delete(moveFrom);
             return taken ? 'vault' : 'slot';
         });
@@ -1008,17 +1087,17 @@ export default function MemoryBook() {
     const handleRestore = (item) => {
         const archivedRef = docRef('archivedItems', item.id);
         if (item.source === 'ank' || item.source === 'amy') {
-            return moveItem(archivedRef, BOARD_COLLECTIONS[item.source], { text: item.text, date: new Date().toISOString(), createdAt: item.createdAt || Date.now() });
+            return moveItem(archivedRef, BOARD_COLLECTIONS[item.source], { text: item.text, ...keepAuthor(item), date: new Date().toISOString(), createdAt: item.createdAt || Date.now() });
         }
         // Newer memories remember their category's id; older ones only have its display name.
         const category = CATEGORIES.find(c => c.id === item.categoryId) || CATEGORIES.find(c => c.label === item.category);
         if (item.source === 'shared' && category) {
-            return placeInSharedSlot(category.id, item.text, { moveFrom: archivedRef, createdAt: item.createdAt || Date.now() });
+            return placeInSharedSlot(category.id, item.text, { moveFrom: archivedRef, createdAt: item.createdAt || Date.now(), author: keepAuthor(item) });
         }
         // Can't tell where it came from (e.g. an imported memory): keep it safe in the Dream Vault
         // rather than deleting it.
         showToast("Couldn't tell which board this came from, so it went to the Dream Vault.", 'notice');
-        return moveItem(archivedRef, 'ideaVault', { text: item.text, createdAt: Date.now() });
+        return moveItem(archivedRef, 'ideaVault', { text: item.text, ...keepAuthor(item), createdAt: Date.now() });
     };
 
     const handlePrint = async (item) => {
@@ -1061,8 +1140,9 @@ export default function MemoryBook() {
             kind: 'constellations-backup',
             version: 1,
             exportedAt: new Date().toISOString(),
-            items: archivedItems.map(({ id, text, category, categoryId, date, source, comment, rating, createdAt }) => ({
+            items: archivedItems.map(({ id, text, category, categoryId, date, source, comment, rating, createdAt, addedBy, commentBy }) => ({
                 id, text, category, categoryId: categoryId || '', date, source, comment: comment || '', rating: rating || 0, createdAt: createdAt || null,
+                addedBy: addedBy || '', commentBy: commentBy || '',
             })),
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'text/plain' });
@@ -1134,6 +1214,7 @@ export default function MemoryBook() {
         : !user ? <SignInScreen />
         : accessDenied ? <AccessDenied email={user.email} onSignOut={handleSignOut} />
         : !unlocked ? <LockScreen passcode={passcode} loadError={passcodeError} onUnlock={handleUnlock} />
+        : people && !myName ? <NamePicker people={people} uid={user.uid} onPick={claimName} />
         : null;
 
     return (
@@ -1354,9 +1435,9 @@ export default function MemoryBook() {
                                 {CATEGORIES.map((category) => (
                                     <CategorySlot
                                         key={category.id} category={category} item={sharedItems[category.id]}
-                                        onAdd={(id, text) => placeInSharedSlot(id, text)}
+                                        onAdd={(id, text) => placeInSharedSlot(id, text, { author: byMe() })}
                                         onComplete={handleCompleteShared}
-                                        onDelete={(id) => deleteWithUndo('sharedItems', sharedItems[id], (slotId, data) => placeInSharedSlot(slotId, data.text, { createdAt: data.createdAt }))}
+                                        onDelete={(id) => deleteWithUndo('sharedItems', sharedItems[id], (slotId, data) => placeInSharedSlot(slotId, data.text, { createdAt: data.createdAt, author: keepAuthor(data) }))}
                                         onEdit={(id, text) => run(() => updateDoc(docRef('sharedItems', id), { text }))}
                                     />
                                 ))}
@@ -1390,7 +1471,7 @@ export default function MemoryBook() {
                             <h2 className="text-4xl font-serif text-white tracking-tight">Movies Vault</h2>
                         </div>
 
-                        <form onSubmit={(e) => { e.preventDefault(); if (movieInput.trim()) { run(() => addDoc(getColRef('movies'), { title: movieInput.trim(), watched: false, createdAt: Date.now() })); setMovieInput(''); } }} className="flex gap-2 w-full md:w-auto relative group">
+                        <form onSubmit={(e) => { e.preventDefault(); if (movieInput.trim()) { run(() => addDoc(getColRef('movies'), { title: movieInput.trim(), ...byMe(), watched: false, createdAt: Date.now() })); setMovieInput(''); } }} className="flex gap-2 w-full md:w-auto relative group">
                             <Input value={movieInput} onChange={(e) => setMovieInput(e.target.value)} placeholder="Add a movie..." className="md:w-[300px] bg-neutral-900/80 border-neutral-800 focus-visible:ring-indigo-500" />
                             <button type="submit" disabled={!movieInput.trim()} className="h-10 px-4 rounded-lg flex items-center justify-center bg-indigo-500 text-white hover:bg-indigo-400 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)]">
                                 <Icon name="plus" size={16} />
@@ -1402,10 +1483,10 @@ export default function MemoryBook() {
                         {movies.map(movie => (
                             <MovieItem
                                 key={movie.id} movie={movie}
-                                onToggle={(m) => run(() => updateDoc(docRef('movies', m.id), m.watched ? { watched: false, rating: null, comment: '' } : { watched: true }))}
+                                onToggle={(m) => run(() => updateDoc(docRef('movies', m.id), m.watched ? { watched: false, rating: null, comment: '', commentBy: '' } : { watched: true }))}
                                 onDelete={(id) => deleteWithUndo('movies', movies.find(m => m.id === id))}
                                 onEdit={(id, title) => run(() => updateDoc(docRef('movies', id), { title }))}
-                                onUpdate={(id, updates) => run(() => updateDoc(docRef('movies', id), updates))}
+                                onUpdate={(id, updates) => run(() => updateDoc(docRef('movies', id), withNoteAuthor(updates)))}
                             />
                         ))}
                         {movies.length === 0 && <div className="col-span-full text-sm text-neutral-500 italic text-center py-12 border border-dashed border-neutral-800/50 rounded-2xl">The cinematic universe is empty.</div>}
@@ -1481,7 +1562,7 @@ export default function MemoryBook() {
                                             <ArchivedItem
                                                 key={item.id} item={item}
                                                 onRestore={handleRestore}
-                                                onUpdate={(id, updates) => run(() => updateDoc(docRef('archivedItems', id), updates))}
+                                                onUpdate={(id, updates) => run(() => updateDoc(docRef('archivedItems', id), withNoteAuthor(updates)))}
                                                 onPrint={handlePrint}
                                             />
                                         ))}
@@ -1507,7 +1588,7 @@ export default function MemoryBook() {
                         </div>
 
                         <div className="p-6 sm:p-8 flex-1 overflow-y-auto overscroll-contain custom-scrollbar">
-                            <form onSubmit={(e) => { e.preventDefault(); const val = e.target.elements.idea.value.trim(); if (val) { run(() => addDoc(getColRef('ideaVault'), { text: val, createdAt: Date.now() })); e.target.reset(); } }} className="mb-8 flex gap-3">
+                            <form onSubmit={(e) => { e.preventDefault(); const val = e.target.elements.idea.value.trim(); if (val) { run(() => addDoc(getColRef('ideaVault'), { text: val, ...byMe(), createdAt: Date.now() })); e.target.reset(); } }} className="mb-8 flex gap-3">
                                 <Input name="idea" placeholder="Drop a new idea..." className="bg-neutral-900/50 border-neutral-800" />
                                 <button type="submit" className="h-10 px-4 shrink-0 rounded-lg flex items-center justify-center bg-purple-500 text-white hover:bg-purple-400 transition-all shadow-[0_0_15px_rgba(168,85,247,0.3)]">
                                     <Icon name="plus" size={16} />
@@ -1517,10 +1598,10 @@ export default function MemoryBook() {
                             <div className="space-y-4">
                                 {ideaVault.map(item => (
                                     <SpotlightCard key={item.id} spotlightColor="rgba(255,255,255,0.05)" className="bg-neutral-900/40 border border-neutral-800/80 rounded-2xl p-5 group card-enter">
-                                        <p className="text-sm text-neutral-200 mb-5 leading-relaxed">{item.text}</p>
+                                        <p className="text-sm text-neutral-200 mb-5 leading-relaxed">{item.text}<PersonTag name={item.addedBy} /></p>
                                         <div className="flex flex-wrap gap-2">
-                                            <Button variant="outline" size="sm" onClick={() => moveItem(docRef('ideaVault', item.id), 'ankItems', { text: item.text, date: new Date().toISOString(), createdAt: Date.now() })} className="h-8 text-xs bg-neutral-950/50 gap-2 border-indigo-500/20 hover:border-indigo-500/50 hover:text-indigo-300 rounded-lg"><Icon name="moon" size={12} /> Ank</Button>
-                                            <Button variant="outline" size="sm" onClick={() => moveItem(docRef('ideaVault', item.id), 'amyItems', { text: item.text, date: new Date().toISOString(), createdAt: Date.now() })} className="h-8 text-xs bg-neutral-950/50 gap-2 border-amber-500/20 hover:border-amber-500/50 hover:text-amber-300 rounded-lg"><Icon name="sun" size={12} /> Amy</Button>
+                                            <Button variant="outline" size="sm" onClick={() => moveItem(docRef('ideaVault', item.id), 'ankItems', { text: item.text, ...keepAuthor(item), date: new Date().toISOString(), createdAt: Date.now() })} className="h-8 text-xs bg-neutral-950/50 gap-2 border-indigo-500/20 hover:border-indigo-500/50 hover:text-indigo-300 rounded-lg"><Icon name="moon" size={12} /> Ank</Button>
+                                            <Button variant="outline" size="sm" onClick={() => moveItem(docRef('ideaVault', item.id), 'amyItems', { text: item.text, ...keepAuthor(item), date: new Date().toISOString(), createdAt: Date.now() })} className="h-8 text-xs bg-neutral-950/50 gap-2 border-amber-500/20 hover:border-amber-500/50 hover:text-amber-300 rounded-lg"><Icon name="sun" size={12} /> Amy</Button>
                                             <Button variant="outline" size="sm" onClick={() => setSharedMenuFor(sharedMenuFor === item.id ? null : item.id)} aria-expanded={sharedMenuFor === item.id} className="h-8 text-xs border-cyan-400/30 text-cyan-400 bg-cyan-400/5 gap-2 rounded-lg hover:bg-cyan-400/10">
                                                 <Icon name="sparkles" size={12} /> Shared
                                                 <Icon name="chevronDown" size={12} className={`transition-transform ${sharedMenuFor === item.id ? 'rotate-180' : ''}`} />
@@ -1532,7 +1613,7 @@ export default function MemoryBook() {
                                                 {CATEGORIES.map(cat => {
                                                     const isFull = !!sharedItems[cat.id];
                                                     return (
-                                                        <button key={cat.id} disabled={isFull} onClick={() => { setSharedMenuFor(null); placeInSharedSlot(cat.id, item.text, { moveFrom: docRef('ideaVault', item.id), fromVault: true }); }} className="text-left px-3 py-2.5 text-[11px] tracking-wide text-neutral-300 bg-neutral-950/50 border border-neutral-800 hover:border-cyan-400/40 hover:text-white rounded-lg disabled:opacity-30 flex justify-between items-center gap-2 transition-colors">
+                                                        <button key={cat.id} disabled={isFull} onClick={() => { setSharedMenuFor(null); placeInSharedSlot(cat.id, item.text, { moveFrom: docRef('ideaVault', item.id), fromVault: true, author: keepAuthor(item) }); }} className="text-left px-3 py-2.5 text-[11px] tracking-wide text-neutral-300 bg-neutral-950/50 border border-neutral-800 hover:border-cyan-400/40 hover:text-white rounded-lg disabled:opacity-30 flex justify-between items-center gap-2 transition-colors">
                                                             {cat.label} {isFull && <Icon name="lock" size={12} className="shrink-0" />}
                                                         </button>
                                                     );
