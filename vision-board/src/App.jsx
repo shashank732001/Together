@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc, updateDoc } from 'firebase/firestore';
 import { toPng } from 'html-to-image';
 
@@ -58,6 +58,7 @@ const Icon = ({ name, size = 16, className = "", style = {} }) => {
         printer: <><path d="M6 9V2h12v7" /><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2" /><rect x="6" y="14" width="12" height="8" /></>,
         download: <><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M4 21h16" /></>,
         upload: <><path d="M12 21V9" /><path d="m7 14 5-5 5 5" /><path d="M4 3h16" /></>,
+        logOut: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /></>,
     };
 
     return (
@@ -618,6 +619,65 @@ const CosmicBackground = () => {
     );
 };
 
+// Shared frame for the screens shown before the board: sign-in, no-access and passcode.
+const GateCard = ({ title, subtitle, children }) => (
+    <div className="min-h-screen w-full flex items-center justify-center relative z-10 px-6">
+        <SpotlightCard spotlightColor="rgba(204, 255, 0, 0.1)" className="w-full max-w-sm bg-neutral-950/80 border border-neutral-800/80 rounded-3xl p-8 md:p-10 shadow-2xl backdrop-blur-xl">
+            <div className="relative z-10 flex flex-col items-center text-center">
+                <div className="p-3 rounded-2xl bg-neutral-900 border border-neutral-800/50 mb-6">
+                    <Icon name="lock" size={22} className="text-[#ccff00]" />
+                </div>
+                <h1 className="text-2xl font-serif text-white tracking-tight mb-2">{title}</h1>
+                <p className="text-xs text-neutral-500 mb-8 leading-relaxed">{subtitle}</p>
+                {children}
+            </div>
+        </SpotlightCard>
+    </div>
+);
+
+const SIGN_IN_ERRORS = {
+    'auth/popup-blocked': 'Please allow pop-ups for this site, then try again.',
+    'auth/unauthorized-domain': "This web address isn't on Firebase's authorized domains list yet.",
+    'auth/network-request-failed': 'No connection — check your internet and try again.',
+};
+
+const SignInScreen = () => {
+    const [error, setError] = useState('');
+    const [busy, setBusy] = useState(false);
+
+    const handleSignIn = async () => {
+        setError('');
+        setBusy(true);
+        try {
+            await signInWithPopup(auth, new GoogleAuthProvider());
+        } catch (e) {
+            // Closing the popup yourself isn't an error worth showing.
+            if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
+                setError(SIGN_IN_ERRORS[e.code] || 'Sign-in failed — please try again.');
+            }
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <GateCard title="A Private Universe" subtitle="Sign in to step inside.">
+            <Button onClick={handleSignIn} disabled={busy} className="w-full">
+                {busy ? 'Opening Google…' : 'Continue with Google'}
+            </Button>
+            {error && <p className="text-[11px] text-red-400 mt-4">{error}</p>}
+        </GateCard>
+    );
+};
+
+const AccessDenied = ({ email, onSignOut }) => (
+    <GateCard title="Not on the guest list" subtitle={`${email || 'This account'} doesn't have access to this universe.`}>
+        <Button variant="outline" onClick={onSignOut} className="w-full gap-2 text-neutral-300">
+            <Icon name="logOut" size={14} /> Use a different account
+        </Button>
+    </GateCard>
+);
+
 const LockScreen = ({ passcode, onUnlock }) => {
     const [code, setCode] = useState('');
     const [error, setError] = useState(false);
@@ -636,33 +696,23 @@ const LockScreen = ({ passcode, onUnlock }) => {
     };
 
     return (
-        <div className="min-h-screen w-full flex items-center justify-center relative z-10 px-6">
-            <SpotlightCard spotlightColor="rgba(204, 255, 0, 0.1)" className="w-full max-w-sm bg-neutral-950/80 border border-neutral-800/80 rounded-3xl p-8 md:p-10 shadow-2xl backdrop-blur-xl">
-                <div className="relative z-10 flex flex-col items-center text-center">
-                    <div className="p-3 rounded-2xl bg-neutral-900 border border-neutral-800/50 mb-6">
-                        <Icon name="lock" size={22} className="text-[#ccff00]" />
-                    </div>
-                    <h1 className="text-2xl font-serif text-white tracking-tight mb-2">A Private Universe</h1>
-                    <p className="text-xs text-neutral-500 mb-8 leading-relaxed">Enter the code only we know.</p>
-
-                    <form onSubmit={handleSubmit} className="w-full">
-                        <Input
-                            type="password"
-                            autoFocus
-                            value={code}
-                            onChange={(e) => setCode(e.target.value)}
-                            placeholder={loading ? "Loading…" : "Enter code"}
-                            disabled={loading}
-                            className={`text-center tracking-[0.3em] bg-neutral-900/50 mb-4 ${error ? 'border-red-500/60' : 'border-neutral-800/80'}`}
-                        />
-                        <Button type="submit" disabled={!code.trim() || loading} className="w-full">
-                            Enter
-                        </Button>
-                        {error && <p className="text-[11px] text-red-400 mt-4">That's not it — try again.</p>}
-                    </form>
-                </div>
-            </SpotlightCard>
-        </div>
+        <GateCard title="A Private Universe" subtitle="Enter the code only we know.">
+            <form onSubmit={handleSubmit} className="w-full">
+                <Input
+                    type="password"
+                    autoFocus
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    placeholder={loading ? "Loading…" : "Enter code"}
+                    disabled={loading}
+                    className={`text-center tracking-[0.3em] bg-neutral-900/50 mb-4 ${error ? 'border-red-500/60' : 'border-neutral-800/80'}`}
+                />
+                <Button type="submit" disabled={!code.trim() || loading} className="w-full">
+                    Enter
+                </Button>
+                {error && <p className="text-[11px] text-red-400 mt-4">That's not it — try again.</p>}
+            </form>
+        </GateCard>
     );
 };
 
@@ -675,6 +725,8 @@ export default function MemoryBook() {
     });
     const [passcode, setPasscode] = useState(null);
     const [user, setUser] = useState(null);
+    const [authReady, setAuthReady] = useState(false);
+    const [accessDenied, setAccessDenied] = useState(false);
     const [ankItems, setAnkItems] = useState([]);
     const [amyItems, setAmyItems] = useState([]);
     const [sharedItems, setSharedItems] = useState({});
@@ -698,17 +750,14 @@ export default function MemoryBook() {
     const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
 
     useEffect(() => {
-        const initAuth = async () => {
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (error) { console.error("Firebase Auth Error:", error); }
-        };
-        initAuth();
-        const unsubscribe = onAuthStateChanged(auth, setUser);
+        const unsubscribe = onAuthStateChanged(auth, (u) => {
+            // Devices that used the old automatic anonymous sign-in still have that session saved.
+            // Drop it so everyone goes through Google sign-in.
+            if (u?.isAnonymous) { signOut(auth); return; }
+            setUser(u);
+            setAccessDenied(false);
+            setAuthReady(true);
+        });
         return () => unsubscribe();
     }, []);
 
@@ -721,6 +770,13 @@ export default function MemoryBook() {
         setUnlocked(true);
     };
 
+    const handleSignOut = async () => {
+        try { localStorage.removeItem(ACTIVITY_STORAGE_KEY); } catch { /* ignore storage errors */ }
+        setUnlocked(false);
+        setPasscode(null);
+        await signOut(auth);
+    };
+
     // Fetch the shared passcode from Firestore so it can be changed without a redeploy.
     useEffect(() => {
         if (!user) return;
@@ -731,6 +787,11 @@ export default function MemoryBook() {
             } else {
                 setDoc(configRef, { passcode: DEFAULT_PASSCODE }).catch(() => {});
             }
+        }, (err) => {
+            // The security rules only let our two accounts read anything, so this means
+            // someone signed in with a Google account that isn't ours.
+            if (err.code === 'permission-denied') setAccessDenied(true);
+            else console.error('Could not load passcode:', err);
         });
         return () => unsub();
     }, [user]);
@@ -752,7 +813,7 @@ export default function MemoryBook() {
     }, [unlocked]);
 
     useEffect(() => {
-        if (!user || !unlocked) return;
+        if (!user || !unlocked || accessDenied) return;
         const unsubAnk = onSnapshot(getColRef('ankItems'), snap => setAnkItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)));
         const unsubAmy = onSnapshot(getColRef('amyItems'), snap => setAmyItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)));
         const unsubMovies = onSnapshot(getColRef('movies'), snap => {
@@ -767,7 +828,7 @@ export default function MemoryBook() {
         const unsubArchive = onSnapshot(getColRef('archivedItems'), snap => setArchivedItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => b.createdAt - a.createdAt)));
         const unsubVault = onSnapshot(getColRef('ideaVault'), snap => setIdeaVault(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)));
         return () => { unsubAnk(); unsubAmy(); unsubMovies(); unsubShared(); unsubArchive(); unsubVault(); };
-    }, [user, unlocked]);
+    }, [user, unlocked, accessDenied]);
 
     const handleAddPersonal = async (board, text) => {
         if (!user) return;
@@ -894,6 +955,13 @@ export default function MemoryBook() {
         acc[item.category].push(item);
         return acc;
     }, {});
+
+    // Whichever screen stands between the visitor and the board, or null once they're through.
+    const gate = !authReady ? <div className="min-h-screen" />
+        : !user ? <SignInScreen />
+        : accessDenied ? <AccessDenied email={user.email} onSignOut={handleSignOut} />
+        : !unlocked ? <LockScreen passcode={passcode} onUnlock={handleUnlock} />
+        : null;
 
     return (
         <div className="min-h-screen w-full bg-neutral-950 text-neutral-200 text-left overflow-x-hidden relative selection:bg-purple-500/30 selection:text-white" style={{ fontFamily: "'Outfit', sans-serif" }}>
@@ -1043,24 +1111,27 @@ export default function MemoryBook() {
             {/* Hidden template captured to an image when printing a memory */}
             <PrintCard item={printItem} cardRef={printCardRef} />
 
-            {!unlocked ? (
-                <LockScreen passcode={passcode} onUnlock={handleUnlock} />
-            ) : (
+            {gate || (
             <>
             {/* Top Navigation */}
             <nav className="border-b border-white/5 bg-[#02040a]/40 backdrop-blur-2xl sticky top-0 z-40">
                 <div className="max-w-[1400px] mx-auto px-6 h-14 flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                        <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-neutral-800 to-neutral-900 border border-white/10 flex items-center justify-center shadow-inner">
+                        <div className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-neutral-800 to-neutral-900 border border-white/10 flex items-center justify-center shadow-inner">
                             <Icon name="sparkles" size={14} className="text-white" />
                         </div>
                         <span className="text-[11px] font-bold tracking-[0.2em] text-neutral-300">{"ANK & AMY'S MEMORY BOOK"}</span>
                     </div>
-                    <Button variant="outline" size="sm" onClick={() => setIsVaultOpen(true)} className="gap-2 text-neutral-300 border-white/10 rounded-full px-4">
-                        <Icon name="sparkles" size={12} className="text-purple-400" />
-                        Dream Vault
-                        {ideaVault.length > 0 && <span className="bg-white/10 text-white px-1.5 py-0.5 rounded text-[10px] leading-none ml-1">{ideaVault.length}</span>}
-                    </Button>
+                    <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={() => setIsVaultOpen(true)} className="gap-2 text-neutral-300 border-white/10 rounded-full px-4">
+                            <Icon name="sparkles" size={12} className="text-purple-400" />
+                            Dream Vault
+                            {ideaVault.length > 0 && <span className="bg-white/10 text-white px-1.5 py-0.5 rounded text-[10px] leading-none ml-1">{ideaVault.length}</span>}
+                        </Button>
+                        <Button variant="outline" size="icon" onClick={handleSignOut} className="text-neutral-400 border-white/10 rounded-full" title={`Sign out${user?.email ? ` (${user.email})` : ''}`} aria-label="Sign out">
+                            <Icon name="logOut" size={14} />
+                        </Button>
+                    </div>
                 </div>
             </nav>
 
