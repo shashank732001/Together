@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc, updateDoc } from 'firebase/firestore';
+import { getFirestore, doc, setDoc, deleteDoc, onSnapshot, collection, addDoc, updateDoc, writeBatch, runTransaction } from 'firebase/firestore';
 import { toPng } from 'html-to-image';
 
 // Safely loading specific Firebase configuration
@@ -80,7 +80,7 @@ const START_DATE = '2026-08-03T22:00:00';
 // document in the Firebase console — no redeploy needed.
 const DEFAULT_PASSCODE = 'CHANGE-ME';
 const ACTIVITY_STORAGE_KEY = 'mb_last_active';
-const INACTIVITY_LIMIT_MS = 2 * 60 * 1000; // re-lock after this long idle (currently 1 min)
+const INACTIVITY_LIMIT_MS = 2 * 60 * 1000; // re-lock after this long idle (currently 2 min)
 
 const CATEGORIES = [
     { id: 'dining', label: 'DINING', sub: 'Tasting the world, one table at a time.', iconName: 'dining' },
@@ -92,6 +92,20 @@ const CATEGORIES = [
     { id: 'deep_dives', label: 'DEEP DIVES', sub: 'Growing together, mind and soul.', iconName: 'deep_dives' },
     { id: 'culture', label: 'CULTURE', sub: 'Finding beauty in the universe around us.', iconName: 'culture' }
 ];
+
+const BOARD_COLLECTIONS = { ank: 'ankItems', amy: 'amyItems' };
+
+const formatDay = (timestamp, withYear) =>
+    new Date(timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(withYear && { year: 'numeric' }) }).toUpperCase();
+
+// Completed memories used to store only "SEP 27", which gets ambiguous after a year. Their
+// createdAt timestamp has the year, so prefer it. The year is shown when it isn't this year,
+// or always with alwaysYear (printed cards).
+const memoryDate = (item, { alwaysYear = false } = {}) => {
+    if (!Number.isFinite(item.createdAt)) return item.date || '';
+    const isThisYear = new Date(item.createdAt).getFullYear() === new Date().getFullYear();
+    return formatDay(item.createdAt, alwaysYear || !isThisYear);
+};
 
 const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
 const ARCHIVE_SOURCES = ['ank', 'amy', 'shared'];
@@ -113,6 +127,7 @@ const sanitizeImportedMemory = (raw) => {
             category: cleanString(raw.category, 100) || 'MEMORY',
             date: cleanString(raw.date, 40),
             source: ARCHIVE_SOURCES.includes(raw.source) ? raw.source : '',
+            categoryId: CATEGORIES.some(c => c.id === raw.categoryId) ? raw.categoryId : '',
             comment: cleanString(raw.comment, 50000),
             rating: Number.isInteger(raw.rating) && raw.rating >= 0 && raw.rating <= 5 ? raw.rating : 0,
             createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : null,
@@ -184,7 +199,7 @@ const TimeTogether = ({ startDate }) => {
     if (!isStarted) return null;
 
     return (
-        <SpotlightCard spotlightColor="rgba(204, 255, 0, 0.15)" className="inline-flex items-center rounded-full border border-[#ccff00]/10 bg-neutral-950/60 shadow-2xl backdrop-blur-xl mb-10 w-fit max-w-full p-1">
+        <SpotlightCard spotlightColor="rgba(204, 255, 0, 0.15)" className="inline-flex items-center rounded-full border border-[#ccff00]/10 bg-neutral-950/60 shadow-2xl backdrop-blur-xl mb-8 md:mb-10 w-fit max-w-full p-1">
             <div className="flex items-center gap-1 sm:gap-2 px-2.5 sm:px-4 py-2 bg-[#ccff00]/10 rounded-full shrink-0">
                 <Icon name="sparkles" size={14} className="text-[#ccff00] shrink-0" />
                 <span className="text-[9px] sm:text-[11px] font-bold tracking-[0.1em] sm:tracking-[0.2em] text-[#ccff00] uppercase whitespace-nowrap">TOGETHER FOR</span>
@@ -229,6 +244,78 @@ const AutoTextarea = ({ className = '', value, ...props }) => {
     );
 };
 
+// Inline editor for titles and notes. Mount it when editing starts: it copies the current text
+// then, so it always starts from the latest saved version (including your partner's changes).
+// Clicking away saves (so does Enter on single-line fields), Escape cancels, and single-line
+// fields never save a blank value — the old text is kept instead. Notes can be cleared.
+// Notes (multiline) also get Save / Cancel buttons: on iPhones, tapping outside a text box often
+// doesn't leave it, and there's no Escape key.
+const InlineEditor = ({ initialValue, onSave, onDone, multiline = false, as: Field = multiline ? AutoTextarea : 'input', ...props }) => {
+    const [value, setValue] = useState(initialValue);
+    const cancelled = useRef(false);
+    const finished = useRef(false);
+
+    // Every way of finishing (Enter, Escape, clicking away, the buttons) ends up here; only the first counts.
+    const finish = (save) => {
+        if (finished.current) return;
+        finished.current = true;
+        const text = value.trim();
+        if (save && (text || multiline) && text !== initialValue) onSave(text);
+        onDone();
+    };
+
+    const handleKeyDown = (e) => {
+        if (e.key === 'Escape') { cancelled.current = true; finish(false); }
+        else if (e.key === 'Enter' && !multiline) { e.preventDefault(); finish(true); }
+    };
+
+    const field = <Field autoFocus value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={handleKeyDown} onBlur={() => finish(!cancelled.current)} enterKeyHint={multiline ? undefined : 'done'} {...props} />;
+    if (!multiline) return field;
+
+    // preventDefault on mousedown keeps the text box focused, so tapping a button doesn't first
+    // count as "clicking away". Cancel also sets its flag on pointerdown, in case the browser moves
+    // focus anyway; a touch that turns into a scroll (pointercancel) clears it again.
+    const keepFocus = (e) => e.preventDefault();
+    return (
+        <div>
+            {field}
+            <div className="flex justify-end gap-2 mt-2">
+                <button type="button" onPointerDown={() => { cancelled.current = true; }} onPointerCancel={() => { cancelled.current = false; }} onMouseDown={keepFocus} onClick={() => finish(false)} className="h-8 px-3 rounded-lg text-xs text-neutral-400 hover:text-white hover:bg-white/5 transition-colors">
+                    Cancel
+                </button>
+                <button type="button" onMouseDown={keepFocus} onClick={() => finish(true)} className="h-8 px-3.5 rounded-lg text-xs font-medium bg-white/10 text-white hover:bg-white/20 transition-colors">
+                    Save
+                </button>
+            </div>
+        </div>
+    );
+};
+
+// Tap a star to rate; tap the same star again to clear it. Stars get bigger tap targets on phones.
+// The hover preview only follows a real mouse — after a tap on a touch screen it would stay stuck.
+const StarRating = ({ value = 0, onChange, size = 12, emptyClassName = 'text-neutral-700' }) => {
+    const [hover, setHover] = useState(0);
+    return (
+        <div className="flex items-center -mx-1.5 sm:-mx-0.5" role="group" aria-label="Rating">
+            {[1, 2, 3, 4, 5].map(star => {
+                const isFilled = (hover || value || 0) >= star;
+                return (
+                    <button
+                        key={star} type="button"
+                        aria-label={value === star ? `Clear the ${star}-star rating` : `Rate ${star} star${star > 1 ? 's' : ''}`}
+                        onPointerEnter={(e) => { if (e.pointerType === 'mouse') setHover(star); }}
+                        onPointerLeave={() => setHover(0)}
+                        onClick={() => { setHover(0); onChange(value === star ? 0 : star); }}
+                        className={`p-1.5 sm:p-0.5 transition-transform can-hover:hover:scale-110 ${isFilled ? 'text-[#ccff00] drop-shadow-[0_0_4px_rgba(204,255,0,0.4)]' : emptyClassName}`}
+                    >
+                        <Icon name={isFilled ? 'starFilled' : 'star'} size={size} className="max-sm:w-[18px] max-sm:h-[18px]" />
+                    </button>
+                );
+            })}
+        </div>
+    );
+};
+
 const Button = ({ className, variant = "default", size = "default", ...props }) => {
     const baseStyle = "inline-flex items-center justify-center whitespace-nowrap rounded-lg text-sm font-medium ring-offset-neutral-950 transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-neutral-700 disabled:pointer-events-none disabled:opacity-50";
     const variants = {
@@ -244,7 +331,6 @@ const Button = ({ className, variant = "default", size = "default", ...props }) 
 const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, onDelete, onEdit, themeColor, glowColor, inputPlaceholder, className = "" }) => {
     const [inputValue, setInputValue] = useState('');
     const [editingId, setEditingId] = useState(null);
-    const [editValue, setEditValue] = useState('');
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -252,9 +338,9 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, on
     };
 
     return (
-        <SpotlightCard spotlightColor={glowColor} className={`flex flex-col h-full bg-neutral-950/80 border border-neutral-800/60 rounded-3xl p-6 md:p-8 shadow-2xl backdrop-blur-md group ${className}`}>
+        <SpotlightCard spotlightColor={glowColor} className={`flex flex-col h-full bg-neutral-950/80 border border-neutral-800/60 rounded-3xl p-5 sm:p-6 md:p-8 shadow-2xl backdrop-blur-md group ${className}`}>
             <div className="relative z-10 flex flex-col h-full">
-                <div className="mb-8">
+                <div className="mb-6 md:mb-8">
                     <div className="flex items-center gap-2 mb-3 opacity-80">
                         <div className="p-1.5 rounded-md bg-neutral-900 border border-neutral-800/50">
                             <Icon name={iconName} size={14} style={{ color: themeColor }} className="animate-pulse" />
@@ -278,11 +364,12 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, on
                     </button>
                 </form>
 
-                <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar min-h-[250px]">
+                <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar min-h-[96px] lg:min-h-[250px]">
                     {items.map(item => (
                         <div key={item.id} className="group/item flex items-start gap-3 p-3.5 bg-neutral-900/40 hover:bg-neutral-800/50 border border-transparent hover:border-neutral-700/50 rounded-xl transition-all duration-300 relative card-enter">
                             <button
                                 onClick={() => onComplete(item)}
+                                aria-label="Mark as done"
                                 className="mt-0.5 flex-shrink-0 w-5 h-5 rounded-full border border-neutral-600 hover:border-transparent flex items-center justify-center transition-all relative overflow-hidden bg-neutral-950"
                             >
                                 <div className="absolute inset-0 opacity-0 group-hover/item:opacity-100 transition-opacity" style={{ backgroundColor: themeColor }} />
@@ -290,20 +377,20 @@ const PersonalBoard = ({ title, subtitle, iconName, items, onAdd, onComplete, on
                             </button>
 
                             {editingId === item.id ? (
-                                <input autoFocus type="text" value={editValue} onChange={(e) => setEditValue(e.target.value)} onBlur={() => { if (editValue.trim() !== item.text) onEdit(item.id, editValue.trim()); setEditingId(null); }} onKeyDown={(e) => { if (e.key === 'Enter') { if (editValue.trim() !== item.text) onEdit(item.id, editValue.trim()); setEditingId(null); } }} className="flex-1 bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-0.5 focus:border-white transition-colors" />
+                                <InlineEditor type="text" initialValue={item.text} onSave={(text) => onEdit(item.id, text)} onDone={() => setEditingId(null)} className="flex-1 bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-0.5 focus:border-white transition-colors" />
                             ) : (
-                                <span onClick={() => { setEditingId(item.id); setEditValue(item.text); }} className="text-sm text-neutral-300 leading-relaxed pt-0.5 flex-1 cursor-text hover:text-white transition-colors transform group-hover/item:translate-x-1 duration-300" title="Click to edit">
+                                <span onClick={() => setEditingId(item.id)} className="text-sm text-neutral-300 leading-relaxed pt-0.5 flex-1 cursor-text hover:text-white transition-colors transform group-hover/item:translate-x-1 duration-300" title="Click to edit">
                                     {item.text}
                                 </span>
                             )}
 
-                            <button onClick={() => onDelete(item.id)} className="opacity-0 group-hover/item:opacity-100 p-1.5 text-neutral-500 hover:text-red-400 hover:bg-red-400/10 rounded-md transition-all">
+                            <button onClick={() => onDelete(item.id)} aria-label="Delete" className="can-hover:opacity-0 can-hover:group-hover/item:opacity-100 focus-visible:opacity-100 p-2 sm:p-1.5 -my-0.5 text-neutral-500 hover:text-red-400 hover:bg-red-400/10 rounded-md transition-all">
                                 <Icon name="trash" size={14} />
                             </button>
                         </div>
                     ))}
                     {items.length === 0 && (
-                        <div className="text-xs text-neutral-600 text-center mt-12 py-10 border border-dashed border-neutral-800/50 rounded-2xl">
+                        <div className="text-xs text-neutral-600 text-center mt-2 py-6 lg:mt-12 lg:py-10 border border-dashed border-neutral-800/50 rounded-2xl">
                             Quiet orbit. No pending memories.
                         </div>
                     )}
@@ -317,22 +404,15 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
     const [isEditingNew, setIsEditingNew] = useState(false);
     const [newInputValue, setNewInputValue] = useState('');
     const [isEditingExisting, setIsEditingExisting] = useState(false);
-    const [existingInputValue, setExistingInputValue] = useState('');
 
     const handleAddNew = (e) => {
         e.preventDefault();
         if (newInputValue.trim()) { onAdd(category.id, newInputValue.trim()); setNewInputValue(''); setIsEditingNew(false); }
     };
 
-    const handleEditExisting = (e) => {
-        e.preventDefault();
-        if (existingInputValue.trim() && existingInputValue.trim() !== item.text) onEdit(category.id, existingInputValue.trim());
-        setIsEditingExisting(false);
-    };
-
     if (item) {
         return (
-            <SpotlightCard spotlightColor="rgba(192, 132, 252, 0.15)" className="relative group bg-neutral-900/60 border border-purple-500/20 rounded-2xl p-5 flex flex-col justify-between transition-all hover:border-purple-500/40 min-h-[140px] card-enter">
+            <SpotlightCard spotlightColor="rgba(192, 132, 252, 0.15)" className="relative group bg-neutral-900/60 border border-purple-500/20 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between transition-all hover:border-purple-500/40 min-h-[96px] sm:min-h-[140px] card-enter">
                 <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-2">
                         <Icon name={category.iconName} size={14} className="text-purple-400" />
@@ -342,19 +422,20 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
                 </div>
 
                 {isEditingExisting ? (
-                    <form onSubmit={handleEditExisting} className="mt-auto mb-2 relative z-20">
-                        <Input autoFocus value={existingInputValue} onChange={(e) => setExistingInputValue(e.target.value)} onBlur={handleEditExisting} className="h-8 text-xs bg-neutral-950 border-neutral-700/80 focus-visible:ring-purple-500 w-full" />
-                    </form>
+                    <div className="mt-auto mb-2 relative z-20">
+                        <InlineEditor as={Input} initialValue={item.text} onSave={(text) => onEdit(category.id, text)} onDone={() => setIsEditingExisting(false)} className="h-8 text-xs bg-neutral-950 border-neutral-700/80 focus-visible:ring-purple-500 w-full" />
+                    </div>
                 ) : (
                     <>
-                        <p onClick={() => { setExistingInputValue(item.text); setIsEditingExisting(true); }} className="text-sm text-white font-medium leading-relaxed cursor-text relative z-10 hover:text-purple-200 transition-colors" title="Click to edit">
+                        <p onClick={() => setIsEditingExisting(true)} className="text-sm text-white font-medium leading-relaxed cursor-text relative z-10 hover:text-purple-200 transition-colors" title="Click to edit">
                             {item.text}
                         </p>
-                        <div className="absolute bottom-3 right-3 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity z-20">
-                            <Button variant="ghost" size="icon" className="h-7 w-7 text-neutral-400 hover:text-red-400 hover:bg-red-400/10 bg-neutral-900/80 backdrop-blur-md" onClick={() => onDelete(category.id)}>
+                        {/* Mouse: floats over the card on hover. Touch: its own row under the text, always visible. */}
+                        <div className="flex justify-end gap-1.5 mt-3 z-20 can-hover:mt-0 can-hover:absolute can-hover:bottom-3 can-hover:right-3 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                            <Button variant="ghost" size="icon" aria-label={`Delete from ${category.label.toLowerCase()}`} className="h-8 w-8 sm:h-7 sm:w-7 text-neutral-400 hover:text-red-400 hover:bg-red-400/10 bg-neutral-900/80 backdrop-blur-md" onClick={() => onDelete(category.id)}>
                                 <Icon name="trash" size={14} />
                             </Button>
-                            <Button variant="outline" size="icon" className="h-7 w-7 border-[#ccff00]/30 text-[#ccff00] hover:bg-[#ccff00] hover:text-neutral-950 bg-neutral-900/80 backdrop-blur-md" onClick={() => onComplete(category.id, item)}>
+                            <Button variant="outline" size="icon" aria-label="Mark as done" className="h-8 w-8 sm:h-7 sm:w-7 border-[#ccff00]/30 text-[#ccff00] hover:bg-[#ccff00] hover:text-neutral-950 bg-neutral-900/80 backdrop-blur-md" onClick={() => onComplete(category.id, item)}>
                                 <Icon name="check" size={14} />
                             </Button>
                         </div>
@@ -365,7 +446,7 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
     }
 
     return (
-        <div className="bg-neutral-950/30 border border-dashed border-neutral-800 rounded-2xl p-5 flex flex-col justify-between transition-all hover:border-neutral-600 hover:bg-neutral-900/50 min-h-[140px]">
+        <div onClick={() => { if (!isEditingNew) setIsEditingNew(true); }} className={`bg-neutral-950/30 border border-dashed border-neutral-800 rounded-2xl p-3.5 sm:p-5 flex flex-col justify-between transition-all hover:border-neutral-600 hover:bg-neutral-900/50 min-h-[96px] sm:min-h-[140px] ${isEditingNew ? '' : 'cursor-pointer group'}`}>
             <div className="flex items-center gap-2 mb-2">
                 <Icon name={category.iconName} size={14} className="text-neutral-600" />
                 <span className="text-[10px] tracking-widest font-bold text-neutral-600 uppercase">{category.label}</span>
@@ -373,16 +454,17 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
 
             {isEditingNew ? (
                 <form onSubmit={handleAddNew} className="mt-auto relative z-20">
-                    <Input autoFocus value={newInputValue} onChange={(e) => setNewInputValue(e.target.value)} onBlur={() => !newInputValue && setIsEditingNew(false)} placeholder="Draft a memory..." className="h-8 text-xs bg-neutral-900/80 focus-visible:ring-neutral-600" />
+                    <Input autoFocus value={newInputValue} onChange={(e) => setNewInputValue(e.target.value)} onBlur={() => !newInputValue && setIsEditingNew(false)} onKeyDown={(e) => { if (e.key === 'Escape') { setNewInputValue(''); setIsEditingNew(false); } }} placeholder="Draft a memory..." className="h-8 text-xs bg-neutral-900/80 focus-visible:ring-neutral-600" />
                 </form>
             ) : (
-                <div className="mt-auto group cursor-pointer relative z-10" onClick={() => setIsEditingNew(true)}>
-                    <p className="text-[11px] text-neutral-500 mb-2 group-hover:text-neutral-300 transition-colors">Add to orbit...</p>
-                    <div className="flex items-center justify-between">
-                        <p className="text-[10px] text-neutral-600 font-serif italic max-w-[80%] leading-snug">{category.sub}</p>
-                        <div className="w-6 h-6 rounded-full bg-neutral-900/80 group-hover:bg-neutral-800 flex items-center justify-center text-neutral-500 group-hover:text-purple-400 transition-colors">
-                            <Icon name="plus" size={12} />
-                        </div>
+                <div className="mt-auto flex items-end justify-between gap-2 relative z-10">
+                    <div>
+                        <p className="text-[11px] text-neutral-500 sm:mb-2 group-hover:text-neutral-300 transition-colors">Add to orbit...</p>
+                        {/* The tagline is dropped on phones, where slots sit two per row. */}
+                        <p className="hidden sm:block text-[10px] text-neutral-600 font-serif italic leading-snug">{category.sub}</p>
+                    </div>
+                    <div className="w-6 h-6 shrink-0 rounded-full bg-neutral-900/80 group-hover:bg-neutral-800 flex items-center justify-center text-neutral-500 group-hover:text-purple-400 transition-colors">
+                        <Icon name="plus" size={12} />
                     </div>
                 </div>
             )}
@@ -391,20 +473,9 @@ const CategorySlot = ({ category, item, onAdd, onComplete, onEdit, onDelete }) =
 };
 
 const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
-    const [editingId, setEditingId] = useState(null);
-    const [editValue, setEditValue] = useState('');
-    const [hoverRating, setHoverRating] = useState(0);
+    const [isEditingTitle, setIsEditingTitle] = useState(false);
     const [isEditingComment, setIsEditingComment] = useState(false);
-    const [comment, setComment] = useState(movie.comment || '');
     const [toggleConfirm, setToggleConfirm] = useState(false);
-
-    useEffect(() => setComment(movie.comment || ''), [movie.comment]);
-
-    const handleSaveComment = (e) => {
-        if (e) e.preventDefault();
-        if (comment.trim() !== (movie.comment || '')) onUpdate(movie.id, { comment: comment.trim() });
-        setIsEditingComment(false);
-    };
 
     const handleToggleClick = () => {
         if (movie.watched && ((movie.rating && movie.rating > 0) || (movie.comment && movie.comment.trim() !== ''))) {
@@ -422,22 +493,22 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
     return (
         <div className={`flex flex-col gap-1.5 p-3.5 rounded-xl border transition-all duration-300 group card-enter ${movie.watched ? 'bg-neutral-900/20 border-neutral-800/40' : 'bg-neutral-900/60 border-neutral-800 hover:border-indigo-500/30 hover:shadow-[0_0_15px_rgba(99,102,241,0.05)]'}`}>
             <div className="flex items-center gap-3 relative">
-                <button onClick={handleToggleClick} className={`flex-shrink-0 w-5 h-5 rounded border flex items-center justify-center transition-all ${movie.watched ? (toggleConfirm ? 'bg-red-500 border-red-500 text-white' : 'bg-indigo-400 border-indigo-400 text-neutral-950 shadow-[0_0_10px_rgba(129,140,248,0.3)]') : 'border-neutral-600 text-transparent hover:border-indigo-400 hover:text-indigo-400/50'}`}>
+                <button onClick={handleToggleClick} aria-label={movie.watched ? "Mark as not watched" : "Mark as watched"} className={`flex-shrink-0 w-5 h-5 rounded border flex items-center justify-center transition-all ${movie.watched ? (toggleConfirm ? 'bg-red-500 border-red-500 text-white' : 'bg-indigo-400 border-indigo-400 text-neutral-950 shadow-[0_0_10px_rgba(129,140,248,0.3)]') : 'border-neutral-600 text-transparent hover:border-indigo-400 hover:text-indigo-400/50'}`}>
                     <Icon name="check" size={12} className="currentColor" />
                 </button>
                 {toggleConfirm && movie.watched && (
                     <span className="absolute -top-6 left-0 text-[10px] font-bold text-red-400 bg-neutral-900 px-2 py-1 rounded shadow-lg border border-red-500/20 whitespace-nowrap z-20 animate-in fade-in slide-in-from-bottom-2">WIPE & RESTORE?</span>
                 )}
 
-                {editingId === movie.id ? (
-                    <input autoFocus type="text" value={editValue} onChange={(e) => setEditValue(e.target.value)} onBlur={() => { if (editValue.trim() !== movie.title) onEdit(movie.id, editValue.trim()); setEditingId(null); }} onKeyDown={(e) => { if (e.key === 'Enter') { if (editValue.trim() !== movie.title) onEdit(movie.id, editValue.trim()); setEditingId(null); } }} className="flex-1 bg-transparent border-b border-indigo-400 text-sm text-white outline-none pb-0.5" />
+                {isEditingTitle ? (
+                    <InlineEditor type="text" initialValue={movie.title} onSave={(title) => onEdit(movie.id, title)} onDone={() => setIsEditingTitle(false)} className="flex-1 bg-transparent border-b border-indigo-400 text-sm text-white outline-none pb-0.5" />
                 ) : (
-                    <span onClick={() => { setEditingId(movie.id); setEditValue(movie.title); }} className={`text-sm leading-tight flex-1 cursor-text transition-all ${movie.watched ? 'text-neutral-600 line-through' : 'text-neutral-200 hover:text-white'}`} title="Click to edit">
+                    <span onClick={() => setIsEditingTitle(true)} className={`text-sm leading-tight flex-1 cursor-text transition-all ${movie.watched ? 'text-neutral-600 line-through' : 'text-neutral-200 hover:text-white'}`} title="Click to edit">
                         {movie.title}
                     </span>
                 )}
 
-                <Button variant="ghost" size="icon" className="h-7 w-7 opacity-0 group-hover:opacity-100 text-neutral-500 hover:text-red-400 hover:bg-red-400/10" onClick={() => onDelete(movie.id)}>
+                <Button variant="ghost" size="icon" aria-label="Delete movie" className="h-8 w-8 sm:h-7 sm:w-7 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 text-neutral-500 hover:text-red-400 hover:bg-red-400/10" onClick={() => onDelete(movie.id)}>
                     <Icon name="trash" size={14} />
                 </Button>
             </div>
@@ -445,22 +516,13 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
             {movie.watched && (
                 <div className="pl-8 pr-8 mt-1 mb-1 animate-in fade-in slide-in-from-top-2 duration-300">
                     <div className="flex flex-col gap-2 bg-neutral-950/40 rounded-lg p-3 border border-neutral-800/50">
-                        <div className="flex items-center gap-1">
-                            {[1, 2, 3, 4, 5].map(star => {
-                                const isFilled = (hoverRating || movie.rating || 0) >= star;
-                                return (
-                                    <button key={star} onMouseEnter={() => setHoverRating(star)} onMouseLeave={() => setHoverRating(0)} onClick={() => onUpdate(movie.id, { rating: star })} className={`transition-transform hover:scale-110 ${isFilled ? 'text-[#ccff00] drop-shadow-[0_0_4px_rgba(204,255,0,0.4)]' : 'text-neutral-700'}`}>
-                                        <Icon name={isFilled ? "starFilled" : "star"} size={14} />
-                                    </button>
-                                );
-                            })}
-                        </div>
+                        <StarRating value={movie.rating} onChange={(rating) => onUpdate(movie.id, { rating })} size={14} />
                         {isEditingComment ? (
-                            <form onSubmit={handleSaveComment} className="mt-1">
-                                <AutoTextarea autoFocus value={comment} onChange={e => setComment(e.target.value)} onBlur={handleSaveComment} placeholder="What did you think?" className="w-full bg-transparent border-b border-indigo-400/50 text-xs text-indigo-300 outline-none pb-1 font-serif italic leading-relaxed" />
-                            </form>
+                            <div className="mt-1">
+                                <InlineEditor multiline initialValue={movie.comment || ''} onSave={(comment) => onUpdate(movie.id, { comment })} onDone={() => setIsEditingComment(false)} placeholder="What did you think?" className="w-full bg-transparent border-b border-indigo-400/50 text-xs text-indigo-300 outline-none pb-1 font-serif italic leading-relaxed" />
+                            </div>
                         ) : (
-                            <p onClick={() => setIsEditingComment(true)} className={`text-xs mt-0.5 cursor-text transition-colors font-serif italic ${movie.comment ? 'text-indigo-300 hover:text-indigo-200' : 'text-neutral-600 hover:text-neutral-400'}`}>
+                            <p onClick={() => setIsEditingComment(true)} className={`text-xs mt-0.5 py-1 cursor-text transition-colors font-serif italic whitespace-pre-wrap break-words ${movie.comment ? 'text-indigo-300 hover:text-indigo-200' : 'text-neutral-500 hover:text-neutral-300'}`}>
                                 {movie.comment || "Add a review..."}
                             </p>
                         )}
@@ -472,16 +534,8 @@ const MovieItem = ({ movie, onToggle, onDelete, onEdit, onUpdate }) => {
 };
 
 const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
-    const [hoverRating, setHoverRating] = useState(0);
     const [isEditing, setIsEditing] = useState(false);
-    const [comment, setComment] = useState(item.comment || '');
     const [restoreConfirm, setRestoreConfirm] = useState(false);
-
-    const handleSaveComment = (e) => {
-        if (e) e.preventDefault();
-        if (comment.trim() !== (item.comment || '')) onUpdate(item.id, { comment: comment.trim() });
-        setIsEditing(false);
-    };
 
     const handleRestoreClick = () => {
         if ((item.rating && item.rating > 0) || (item.comment && item.comment.trim() !== '')) {
@@ -509,43 +563,36 @@ const ArchivedItem = ({ item, onRestore, onUpdate, onPrint }) => {
                     <Button
                         variant="ghost"
                         size="icon"
-                        className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-all bg-neutral-950/50 text-neutral-500 hover:text-white hover:bg-white/10"
+                        className="h-8 w-8 sm:h-7 sm:w-7 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 transition-all bg-neutral-950/50 text-neutral-500 hover:text-white hover:bg-white/10"
                         onClick={() => onPrint(item)}
                         title="Print this memory"
+                        aria-label="Print this memory"
                     >
                         <Icon name="printer" size={12} />
                     </Button>
                     <Button
                         variant="ghost"
                         size="sm"
-                        className={`h-7 opacity-0 group-hover:opacity-100 transition-all bg-neutral-950/50 flex items-center gap-1 px-2 ${restoreConfirm ? 'text-red-400 hover:bg-red-400/20' : 'text-neutral-500 hover:text-white hover:bg-white/10'}`}
+                        className={`h-8 sm:h-7 can-hover:opacity-0 can-hover:group-hover:opacity-100 focus-visible:opacity-100 transition-all bg-neutral-950/50 flex items-center gap-1 px-2 ${restoreConfirm ? 'text-red-400 hover:bg-red-400/20' : 'text-neutral-500 hover:text-white hover:bg-white/10'}`}
                         onClick={handleRestoreClick}
                         title="Restore to board"
+                        aria-label={restoreConfirm ? "Tap again to restore (clears rating and note)" : "Restore to board"}
                     >
                         <Icon name="undo" size={12} />
                         {restoreConfirm && <span className="text-[10px] font-bold uppercase tracking-wider">WIPE & RESTORE?</span>}
                     </Button>
-                    <span className="text-[10px] font-mono font-medium text-neutral-500 bg-neutral-950/80 px-2.5 py-1 rounded-md border border-neutral-800/80 whitespace-nowrap tracking-tight">{item.date}</span>
+                    <span className="text-[10px] font-mono font-medium text-neutral-500 bg-neutral-950/80 px-2.5 py-1 rounded-md border border-neutral-800/80 whitespace-nowrap tracking-tight">{memoryDate(item)}</span>
                 </div>
             </div>
 
             <div className="pl-8">
-                <div className="flex items-center gap-1 mb-2">
-                    {[1, 2, 3, 4, 5].map(star => {
-                        const isFilled = (hoverRating || item.rating || 0) >= star;
-                        return (
-                            <button key={star} onMouseEnter={() => setHoverRating(star)} onMouseLeave={() => setHoverRating(0)} onClick={() => onUpdate(item.id, { rating: star })} className={`transition-transform hover:scale-110 ${isFilled ? 'text-[#ccff00] drop-shadow-[0_0_4px_rgba(204,255,0,0.4)]' : 'text-neutral-800 hover:text-neutral-600'}`}>
-                                <Icon name={isFilled ? "starFilled" : "star"} size={12} />
-                            </button>
-                        );
-                    })}
+                <div className="mb-1 sm:mb-2">
+                    <StarRating value={item.rating} onChange={(rating) => onUpdate(item.id, { rating })} emptyClassName="text-neutral-700 can-hover:hover:text-neutral-500" />
                 </div>
                 {isEditing ? (
-                    <form onSubmit={handleSaveComment}>
-                        <AutoTextarea autoFocus value={comment} onChange={e => setComment(e.target.value)} onBlur={handleSaveComment} placeholder="Write a memory..." className="w-full bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-1 font-serif italic leading-relaxed focus:border-white" />
-                    </form>
+                    <InlineEditor multiline initialValue={item.comment || ''} onSave={(comment) => onUpdate(item.id, { comment })} onDone={() => setIsEditing(false)} placeholder="Write a memory..." className="w-full bg-transparent border-b border-neutral-500 text-sm text-neutral-200 outline-none pb-1 font-serif italic leading-relaxed focus:border-white" />
                 ) : (
-                    <p onClick={() => setIsEditing(true)} className={`text-sm cursor-text transition-colors font-serif italic ${item.comment ? 'text-neutral-400 hover:text-neutral-200' : 'text-neutral-600 hover:text-neutral-400'}`}>
+                    <p onClick={() => setIsEditing(true)} className={`text-sm py-1 cursor-text transition-colors font-serif italic whitespace-pre-wrap break-words ${item.comment ? 'text-neutral-400 hover:text-neutral-200' : 'text-neutral-500 hover:text-neutral-300'}`}>
                         {item.comment || "Add a memory or note..."}
                     </p>
                 )}
@@ -589,12 +636,12 @@ const PrintCard = ({ item, cardRef }) => (
                             “{item.text}”
                         </div>
                         {item.comment && (
-                            <div style={{ fontFamily: "'Playfair Display', serif", fontStyle: 'italic', fontSize: '17px', lineHeight: 1.6, color: '#4a4438', borderTop: '1px solid #c9c2b3', paddingTop: '22px', marginTop: '28px' }}>
+                            <div style={{ fontFamily: "'Playfair Display', serif", fontStyle: 'italic', fontSize: '17px', lineHeight: 1.6, color: '#4a4438', borderTop: '1px solid #c9c2b3', paddingTop: '22px', marginTop: '28px', whiteSpace: 'pre-wrap' }}>
                                 {item.comment}
                             </div>
                         )}
                         <div style={{ marginTop: '36px', fontSize: '10px', letterSpacing: '2px', color: '#8a8270' }}>
-                            {item.date} &nbsp;·&nbsp; ANK &amp; AMY
+                            {memoryDate(item, { alwaysYear: true })} &nbsp;·&nbsp; ANK &amp; AMY
                         </div>
                     </div>
                 </>
@@ -709,7 +756,7 @@ const AccessDenied = ({ email, onSignOut }) => (
     </GateCard>
 );
 
-const LockScreen = ({ passcode, onUnlock }) => {
+const LockScreen = ({ passcode, loadError, onUnlock }) => {
     const [code, setCode] = useState('');
     const [error, setError] = useState(false);
     const loading = passcode === null;
@@ -734,7 +781,7 @@ const LockScreen = ({ passcode, onUnlock }) => {
                     autoFocus
                     value={code}
                     onChange={(e) => setCode(e.target.value)}
-                    placeholder={loading ? "Loading…" : "Enter code"}
+                    placeholder={loadError ? "Couldn't load" : loading ? "Loading…" : "Enter code"}
                     disabled={loading}
                     className={`text-center tracking-[0.3em] bg-neutral-900/50 mb-4 ${error ? 'border-red-500/60' : 'border-neutral-800/80'}`}
                 />
@@ -742,6 +789,7 @@ const LockScreen = ({ passcode, onUnlock }) => {
                     Enter
                 </Button>
                 {error && <p className="text-[11px] text-red-400 mt-4">That's not it — try again.</p>}
+                {loadError && <p className="text-[11px] text-red-400 mt-4">Couldn't reach the database — check your connection and reload the page.</p>}
             </form>
         </GateCard>
     );
@@ -766,6 +814,7 @@ export default function MemoryBook() {
     const [ideaVault, setIdeaVault] = useState([]);
 
     const [isVaultOpen, setIsVaultOpen] = useState(false);
+    const [sharedMenuFor, setSharedMenuFor] = useState(null); // vault idea whose category list is open
     const [movieInput, setMovieInput] = useState('');
 
     const [archiveSearch, setArchiveSearch] = useState('');
@@ -778,7 +827,45 @@ export default function MemoryBook() {
     const [backupStatus, setBackupStatus] = useState('');
     const fileInputRef = useRef(null);
 
+    const [passcodeError, setPasscodeError] = useState(false);
+    const [toast, setToast] = useState(null);
+    const toastTimer = useRef(null);
+
     const getColRef = (colName) => collection(db, 'artifacts', appId, 'public', 'data', colName);
+    const docRef = (colName, id) => doc(db, 'artifacts', appId, 'public', 'data', colName, id);
+
+    // `action` adds a button to the message, e.g. { label: 'Undo', onClick }.
+    const showToast = (text, tone = 'error', action = null) => {
+        clearTimeout(toastTimer.current);
+        setToast({ text, tone, action });
+        toastTimer.current = setTimeout(() => setToast(null), action ? 7000 : 5000);
+    };
+    useEffect(() => () => clearTimeout(toastTimer.current), []);
+
+    // Runs a database write and says so if it fails, instead of failing silently. Also catches
+    // errors Firestore throws straight away, before anything is sent (like an invalid value).
+    const run = async (action) => {
+        try { await action(); }
+        catch (err) {
+            console.error(err);
+            showToast("Couldn't save that — check your connection and try again.");
+        }
+    };
+
+    const handleLoadError = (err) => {
+        console.error(err);
+        showToast("Couldn't load everything — try reloading the page.");
+    };
+
+    // Deleting is instant, so offer an Undo for a few seconds — an easy slip on a phone.
+    // `restore` puts it back; by default the same document is written again with its old data.
+    const deleteWithUndo = (colName, item, restore = (id, data) => run(() => setDoc(docRef(colName, id), data))) => {
+        if (!item) return;
+        const { id, ...data } = item;
+        const pending = deleteDoc(docRef(colName, id));
+        showToast('Deleted.', 'notice', { label: 'Undo', onClick: () => restore(id, data) });
+        return run(() => pending);
+    };
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -813,6 +900,7 @@ export default function MemoryBook() {
         if (!user) return;
         const configRef = doc(db, 'artifacts', appId, 'public', 'data', 'config', 'access');
         const unsub = onSnapshot(configRef, (snap) => {
+            setPasscodeError(false);
             if (snap.exists()) {
                 setPasscode(snap.data().passcode ?? '');
             } else {
@@ -822,7 +910,7 @@ export default function MemoryBook() {
             // The security rules only let our two accounts read anything, so this means
             // someone signed in with a Google account that isn't ours.
             if (err.code === 'permission-denied') setAccessDenied(true);
-            else console.error('Could not load passcode:', err);
+            else { console.error('Could not load passcode:', err); setPasscodeError(true); }
         });
         return () => unsub();
     }, [user]);
@@ -843,54 +931,94 @@ export default function MemoryBook() {
         };
     }, [unlocked]);
 
+    // Dream Vault drawer: Escape closes it, and the page behind doesn't scroll while it's open
+    // (on phones, swiping inside the drawer would otherwise scroll the board underneath).
+    useEffect(() => {
+        if (!isVaultOpen) return;
+        setSharedMenuFor(null);
+        const onKeyDown = (e) => { if (e.key === 'Escape') setIsVaultOpen(false); };
+        window.addEventListener('keydown', onKeyDown);
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+            window.removeEventListener('keydown', onKeyDown);
+            document.body.style.overflow = previousOverflow;
+        };
+    }, [isVaultOpen]);
+
     useEffect(() => {
         if (!user || !unlocked || accessDenied) return;
-        const unsubAnk = onSnapshot(getColRef('ankItems'), snap => setAnkItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)));
-        const unsubAmy = onSnapshot(getColRef('amyItems'), snap => setAmyItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)));
+        const unsubAnk = onSnapshot(getColRef('ankItems'), snap => setAnkItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)), handleLoadError);
+        const unsubAmy = onSnapshot(getColRef('amyItems'), snap => setAmyItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)), handleLoadError);
         const unsubMovies = onSnapshot(getColRef('movies'), snap => {
             const items = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             items.sort((a, b) => a.watched === b.watched ? (b.createdAt || 0) - (a.createdAt || 0) : a.watched ? 1 : -1);
             setMovies(items);
-        });
+        }, handleLoadError);
         const unsubShared = onSnapshot(getColRef('sharedItems'), snap => {
             const items = {}; snap.docs.forEach(doc => { items[doc.id] = { id: doc.id, ...doc.data() }; });
             setSharedItems(items);
-        });
-        const unsubArchive = onSnapshot(getColRef('archivedItems'), snap => setArchivedItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => b.createdAt - a.createdAt)));
-        const unsubVault = onSnapshot(getColRef('ideaVault'), snap => setIdeaVault(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)));
+        }, handleLoadError);
+        const unsubArchive = onSnapshot(getColRef('archivedItems'), snap => setArchivedItems(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => b.createdAt - a.createdAt)), handleLoadError);
+        const unsubVault = onSnapshot(getColRef('ideaVault'), snap => setIdeaVault(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })).sort((a, b) => a.createdAt - b.createdAt)), handleLoadError);
         return () => { unsubAnk(); unsubAmy(); unsubMovies(); unsubShared(); unsubArchive(); unsubVault(); };
     }, [user, unlocked, accessDenied]);
 
-    const handleAddPersonal = async (board, text) => {
-        if (!user) return;
-        await addDoc(getColRef(board === 'ank' ? 'ankItems' : 'amyItems'), { text, date: new Date().toISOString(), createdAt: Date.now() });
-    };
+    const handleAddPersonal = (board, text) =>
+        run(() => addDoc(getColRef(BOARD_COLLECTIONS[board]), { text, date: new Date().toISOString(), createdAt: Date.now() }));
 
-    const handleCompletePersonal = async (board, item) => {
-        if (!user) return;
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', board === 'ank' ? 'ankItems' : 'amyItems', item.id));
-        await addDoc(getColRef('archivedItems'), { text: item.text, category: board === 'ank' ? "Ank's Orbit" : "Amy's Orbit", date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase(), source: board, createdAt: Date.now() });
-    };
+    // Moving between lists is always one batch: removing from one place and adding to the other
+    // happen together, so a dropped connection can't lose the item or leave it in both.
+    const moveItem = (fromRef, toColName, data) => run(() => {
+        const batch = writeBatch(db);
+        batch.set(doc(getColRef(toColName)), data);
+        batch.delete(fromRef);
+        return batch.commit();
+    });
 
-    const handleCompleteShared = async (categoryId, item) => {
-        if (!user) return;
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', categoryId));
+    const archiveItem = (fromRef, fields) =>
+        moveItem(fromRef, 'archivedItems', { ...fields, date: formatDay(Date.now(), true), createdAt: Date.now() });
+
+    const handleCompletePersonal = (board, item) =>
+        archiveItem(docRef(BOARD_COLLECTIONS[board], item.id), { text: item.text, category: board === 'ank' ? "Ank's Orbit" : "Amy's Orbit", source: board });
+
+    const handleCompleteShared = (categoryId, item) => {
         const category = CATEGORIES.find(c => c.id === categoryId);
-        await addDoc(getColRef('archivedItems'), { text: item.text, category: category ? category.label : 'SHARED', date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase(), source: 'shared', createdAt: Date.now() });
+        return archiveItem(docRef('sharedItems', categoryId), { text: item.text, category: category ? category.label : 'SHARED', categoryId, source: 'shared' });
     };
 
-    const handleRestore = async (item) => {
-        if (!user) return;
+    // Fills a shared slot inside a transaction, so if you both fill the same slot at the same
+    // moment, nobody's entry gets overwritten. If the slot is taken by then, the text goes to the
+    // Dream Vault instead — unless it came from the vault, where it just stays. `moveFrom` (the
+    // vault idea or archived memory being moved) is removed in the same step.
+    const placeInSharedSlot = (categoryId, text, { moveFrom = null, fromVault = false, createdAt = Date.now() } = {}) => run(async () => {
+        const outcome = await runTransaction(db, async (tx) => {
+            const slotRef = docRef('sharedItems', categoryId);
+            const taken = (await tx.get(slotRef)).exists();
+            if (taken && fromVault) return 'kept';
+            if (taken) tx.set(doc(getColRef('ideaVault')), { text, createdAt: Date.now() });
+            else tx.set(slotRef, { text, date: new Date().toISOString(), createdAt });
+            if (moveFrom) tx.delete(moveFrom);
+            return taken ? 'vault' : 'slot';
+        });
+        if (outcome === 'vault') showToast('That slot was already filled, so this went to the Dream Vault instead.', 'notice');
+        if (outcome === 'kept') showToast('That slot was just filled — the idea is still in the Dream Vault.', 'notice');
+    });
+
+    const handleRestore = (item) => {
+        const archivedRef = docRef('archivedItems', item.id);
         if (item.source === 'ank' || item.source === 'amy') {
-            await addDoc(getColRef(item.source === 'ank' ? 'ankItems' : 'amyItems'), { text: item.text, date: new Date().toISOString(), createdAt: item.createdAt || Date.now() });
-        } else if (item.source === 'shared') {
-            const category = CATEGORIES.find(c => c.label === item.category);
-            if (category) {
-                if (sharedItems[category.id]) await addDoc(getColRef('ideaVault'), { text: item.text, createdAt: Date.now() });
-                else await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', category.id), { text: item.text, date: new Date().toISOString(), createdAt: item.createdAt || Date.now() });
-            }
+            return moveItem(archivedRef, BOARD_COLLECTIONS[item.source], { text: item.text, date: new Date().toISOString(), createdAt: item.createdAt || Date.now() });
         }
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', item.id));
+        // Newer memories remember their category's id; older ones only have its display name.
+        const category = CATEGORIES.find(c => c.id === item.categoryId) || CATEGORIES.find(c => c.label === item.category);
+        if (item.source === 'shared' && category) {
+            return placeInSharedSlot(category.id, item.text, { moveFrom: archivedRef, createdAt: item.createdAt || Date.now() });
+        }
+        // Can't tell where it came from (e.g. an imported memory): keep it safe in the Dream Vault
+        // rather than deleting it.
+        showToast("Couldn't tell which board this came from, so it went to the Dream Vault.", 'notice');
+        return moveItem(archivedRef, 'ideaVault', { text: item.text, createdAt: Date.now() });
     };
 
     const handlePrint = async (item) => {
@@ -933,8 +1061,8 @@ export default function MemoryBook() {
             kind: 'constellations-backup',
             version: 1,
             exportedAt: new Date().toISOString(),
-            items: archivedItems.map(({ id, text, category, date, source, comment, rating, createdAt }) => ({
-                id, text, category, date, source, comment: comment || '', rating: rating || 0, createdAt: createdAt || null,
+            items: archivedItems.map(({ id, text, category, categoryId, date, source, comment, rating, createdAt }) => ({
+                id, text, category, categoryId: categoryId || '', date, source, comment: comment || '', rating: rating || 0, createdAt: createdAt || null,
             })),
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'text/plain' });
@@ -972,7 +1100,7 @@ export default function MemoryBook() {
                 const memory = sanitizeImportedMemory(raw);
                 if (!memory) { invalid++; continue; }
                 if (memory.id && existingIds.has(memory.id)) { skipped++; continue; }
-                if (memory.id) await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', memory.id), memory.data);
+                if (memory.id) await setDoc(docRef('archivedItems', memory.id), memory.data);
                 else await addDoc(getColRef('archivedItems'), memory.data);
                 if (memory.id) existingIds.add(memory.id);
                 imported++;
@@ -1005,7 +1133,7 @@ export default function MemoryBook() {
     const gate = !authReady ? <div className="min-h-screen" />
         : !user ? <SignInScreen />
         : accessDenied ? <AccessDenied email={user.email} onSignOut={handleSignOut} />
-        : !unlocked ? <LockScreen passcode={passcode} onUnlock={handleUnlock} />
+        : !unlocked ? <LockScreen passcode={passcode} loadError={passcodeError} onUnlock={handleUnlock} />
         : null;
 
     return (
@@ -1068,6 +1196,12 @@ export default function MemoryBook() {
         }
         .card-enter {
           animation: card-enter 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+        }
+
+        /* Phones set to "Reduce motion": keep the sky still (also easier on the battery). */
+        @media (prefers-reduced-motion: reduce) {
+          .bg-aurora, .bg-star-layer, .card-enter, .animate-in, .animate-pulse { animation: none !important; }
+          .meteor-shower { display: none; }
         }
 
         .bg-aurora {
@@ -1160,35 +1294,36 @@ export default function MemoryBook() {
             <>
             {/* Top Navigation */}
             <nav className="border-b border-white/5 bg-[#02040a]/40 backdrop-blur-2xl sticky top-0 z-40">
-                <div className="max-w-[1400px] mx-auto px-6 h-14 flex items-center justify-between">
+                <div className="max-w-[1400px] mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-3">
                         <div className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-neutral-800 to-neutral-900 border border-white/10 flex items-center justify-center shadow-inner">
                             <Icon name="sparkles" size={14} className="text-white" />
                         </div>
-                        <span className="text-[11px] font-bold tracking-[0.2em] text-neutral-300">{"ANK & AMY'S MEMORY BOOK"}</span>
+                        <span className="text-[10px] sm:text-[11px] leading-snug font-bold tracking-[0.15em] sm:tracking-[0.2em] text-neutral-300">{"ANK & AMY'S MEMORY BOOK"}</span>
                     </div>
                     <div className="flex items-center gap-2">
-                        <Button variant="outline" size="sm" onClick={() => setIsVaultOpen(true)} className="gap-2 text-neutral-300 border-white/10 rounded-full px-4">
+                        <Button variant="outline" size="sm" onClick={() => setIsVaultOpen(true)} aria-label="Open Dream Vault" className="gap-2 text-neutral-300 border-white/10 rounded-full px-3 min-[380px]:px-4 shrink-0">
                             <Icon name="sparkles" size={12} className="text-purple-400" />
-                            Dream Vault
+                            {/* Narrow phones: icon + count only, so the title keeps its room. */}
+                            <span className="max-[379px]:sr-only">Dream Vault</span>
                             {ideaVault.length > 0 && <span className="bg-white/10 text-white px-1.5 py-0.5 rounded text-[10px] leading-none ml-1">{ideaVault.length}</span>}
                         </Button>
-                        <Button variant="outline" size="icon" onClick={handleSignOut} className="text-neutral-400 border-white/10 rounded-full" title={`Sign out${user?.email ? ` (${user.email})` : ''}`} aria-label="Sign out">
+                        <Button variant="outline" size="icon" onClick={handleSignOut} className="shrink-0 text-neutral-400 border-white/10 rounded-full" title={`Sign out${user?.email ? ` (${user.email})` : ''}`} aria-label="Sign out">
                             <Icon name="logOut" size={14} />
                         </Button>
                     </div>
                 </div>
             </nav>
 
-            <main className="max-w-[1400px] w-full mx-auto px-6 py-16 relative z-10 space-y-24">
+            <main className="max-w-[1400px] w-full mx-auto px-4 sm:px-6 py-10 lg:py-16 relative z-10 space-y-14 lg:space-y-24">
 
                 {/* Hero Section */}
                 <section className="flex flex-col max-w-4xl card-enter">
                     <TimeTogether startDate={START_DATE} />
-                    <h1 className="text-5xl md:text-7xl font-serif tracking-tight text-white leading-[1.1] mb-8">
+                    <h1 className="text-[2.6rem] sm:text-5xl md:text-7xl font-serif tracking-tight text-white leading-[1.1] mb-6 md:mb-8">
                         Two people, <span className="text-transparent bg-clip-text bg-gradient-to-r from-purple-400 via-cyan-400 to-indigo-400 animate-pulse">one unfolding universe.</span>
                     </h1>
-                    <p className="text-lg md:text-xl text-neutral-400 font-serif italic leading-relaxed border-l-[3px] border-purple-500/30 pl-6 py-1">
+                    <p className="text-base sm:text-lg md:text-xl text-neutral-400 font-serif italic leading-relaxed border-l-[3px] border-purple-500/30 pl-4 sm:pl-6 py-1">
                         The sun dreams of tomorrow. The moon remembers yesterday.<br />Together, we build today.
                     </p>
                 </section>
@@ -1204,25 +1339,25 @@ export default function MemoryBook() {
                         items={ankItems}
                         onAdd={(text) => handleAddPersonal('ank', text)}
                         onComplete={(item) => handleCompletePersonal('ank', item)}
-                        onDelete={(itemId) => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ankItems', itemId))}
-                        onEdit={(itemId, text) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ankItems', itemId), { text })}
+                        onDelete={(itemId) => deleteWithUndo('ankItems', ankItems.find(i => i.id === itemId))}
+                        onEdit={(itemId, text) => run(() => updateDoc(docRef('ankItems', itemId), { text }))}
                     />
 
-                    <SpotlightCard spotlightColor="rgba(45, 212, 191, 0.1)" className="order-1 lg:order-2 bg-neutral-950/80 border border-neutral-800/80 rounded-3xl p-8 lg:p-10 flex flex-col relative shadow-2xl backdrop-blur-xl">
+                    <SpotlightCard spotlightColor="rgba(45, 212, 191, 0.1)" className="order-1 lg:order-2 bg-neutral-950/80 border border-neutral-800/80 rounded-3xl p-4 sm:p-8 lg:p-10 flex flex-col relative shadow-2xl backdrop-blur-xl">
                         <div className="relative z-10 flex flex-col h-full">
-                            <div className="mb-8 text-center">
+                            <div className="mb-5 sm:mb-8 mt-2 sm:mt-0 text-center">
                                 <h2 className="text-3xl lg:text-4xl font-serif text-white tracking-tight">Where our orbits meet.</h2>
                                 <span className="text-[10px] tracking-[0.2em] font-bold text-cyan-400/80 uppercase mt-3 block">THE CENTER OF GRAVITY</span>
                             </div>
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 flex-1">
+                            <div className="grid grid-cols-2 gap-2.5 sm:gap-4 flex-1">
                                 {CATEGORIES.map((category) => (
                                     <CategorySlot
                                         key={category.id} category={category} item={sharedItems[category.id]}
-                                        onAdd={(id, text) => setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', id), { text, date: new Date().toISOString(), createdAt: Date.now() })}
+                                        onAdd={(id, text) => placeInSharedSlot(id, text)}
                                         onComplete={handleCompleteShared}
-                                        onDelete={(id) => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', id))}
-                                        onEdit={(id, text) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', id), { text })}
+                                        onDelete={(id) => deleteWithUndo('sharedItems', sharedItems[id], (slotId, data) => placeInSharedSlot(slotId, data.text, { createdAt: data.createdAt }))}
+                                        onEdit={(id, text) => run(() => updateDoc(docRef('sharedItems', id), { text }))}
                                     />
                                 ))}
                             </div>
@@ -1237,14 +1372,14 @@ export default function MemoryBook() {
                         items={amyItems}
                         onAdd={(text) => handleAddPersonal('amy', text)}
                         onComplete={(item) => handleCompletePersonal('amy', item)}
-                        onDelete={(itemId) => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'amyItems', itemId))}
-                        onEdit={(itemId, text) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'amyItems', itemId), { text })}
+                        onDelete={(itemId) => deleteWithUndo('amyItems', amyItems.find(i => i.id === itemId))}
+                        onEdit={(itemId, text) => run(() => updateDoc(docRef('amyItems', itemId), { text }))}
                     />
                 </section>
 
                 {/* Movies Vault */}
-                <SpotlightCard spotlightColor="rgba(99, 102, 241, 0.1)" className="bg-neutral-950/60 border border-neutral-800/80 rounded-3xl p-6 lg:p-10 backdrop-blur-md">
-                    <div className="relative z-10 flex flex-col md:flex-row md:items-end justify-between mb-10 gap-6">
+                <SpotlightCard spotlightColor="rgba(99, 102, 241, 0.1)" className="bg-neutral-950/60 border border-neutral-800/80 rounded-3xl p-5 sm:p-6 lg:p-10 backdrop-blur-md">
+                    <div className="relative z-10 flex flex-col md:flex-row md:items-end justify-between mb-6 md:mb-10 gap-5 md:gap-6">
                         <div>
                             <div className="flex items-center gap-2 mb-3">
                                 <div className="p-1.5 rounded-md bg-indigo-500/10 border border-indigo-500/20">
@@ -1255,7 +1390,7 @@ export default function MemoryBook() {
                             <h2 className="text-4xl font-serif text-white tracking-tight">Movies Vault</h2>
                         </div>
 
-                        <form onSubmit={(e) => { e.preventDefault(); if (movieInput.trim()) { addDoc(getColRef('movies'), { title: movieInput.trim(), watched: false, createdAt: Date.now() }); setMovieInput(''); } }} className="flex gap-2 w-full md:w-auto relative group">
+                        <form onSubmit={(e) => { e.preventDefault(); if (movieInput.trim()) { run(() => addDoc(getColRef('movies'), { title: movieInput.trim(), watched: false, createdAt: Date.now() })); setMovieInput(''); } }} className="flex gap-2 w-full md:w-auto relative group">
                             <Input value={movieInput} onChange={(e) => setMovieInput(e.target.value)} placeholder="Add a movie..." className="md:w-[300px] bg-neutral-900/80 border-neutral-800 focus-visible:ring-indigo-500" />
                             <button type="submit" disabled={!movieInput.trim()} className="h-10 px-4 rounded-lg flex items-center justify-center bg-indigo-500 text-white hover:bg-indigo-400 disabled:opacity-50 disabled:pointer-events-none transition-all shadow-[0_0_15px_rgba(99,102,241,0.3)]">
                                 <Icon name="plus" size={16} />
@@ -1263,14 +1398,14 @@ export default function MemoryBook() {
                         </form>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[500px] overflow-y-auto custom-scrollbar pr-2 pb-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 md:max-h-[500px] md:overflow-y-auto custom-scrollbar md:pr-2 pb-4">
                         {movies.map(movie => (
                             <MovieItem
                                 key={movie.id} movie={movie}
-                                onToggle={(m) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', m.id), { watched: !m.watched, rating: m.watched ? null : m.rating, comment: m.watched ? '' : m.comment })}
-                                onDelete={(id) => deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', id))}
-                                onEdit={(id, title) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', id), { title })}
-                                onUpdate={(id, updates) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', id), updates)}
+                                onToggle={(m) => run(() => updateDoc(docRef('movies', m.id), m.watched ? { watched: false, rating: null, comment: '' } : { watched: true }))}
+                                onDelete={(id) => deleteWithUndo('movies', movies.find(m => m.id === id))}
+                                onEdit={(id, title) => run(() => updateDoc(docRef('movies', id), { title }))}
+                                onUpdate={(id, updates) => run(() => updateDoc(docRef('movies', id), updates))}
                             />
                         ))}
                         {movies.length === 0 && <div className="col-span-full text-sm text-neutral-500 italic text-center py-12 border border-dashed border-neutral-800/50 rounded-2xl">The cinematic universe is empty.</div>}
@@ -1279,7 +1414,7 @@ export default function MemoryBook() {
 
                 {/* Hall of Fame */}
                 <section className="bg-transparent relative">
-                    <div className="flex flex-col md:flex-row md:items-end justify-between mb-8 gap-6 pb-6">
+                    <div className="flex flex-col md:flex-row md:items-end justify-between mb-6 md:mb-8 gap-5 md:gap-6 md:pb-6">
                         <div>
                             <h2 className="text-4xl lg:text-5xl font-serif text-white tracking-tight">
                                 Our Constellations.
@@ -1305,7 +1440,7 @@ export default function MemoryBook() {
                     )}
 
                     {archivedItems.length > 0 && (
-                        <div className="flex flex-col md:flex-row gap-4 mb-12 p-5 bg-neutral-900/40 backdrop-blur-xl rounded-2xl border border-white/5 shadow-2xl">
+                        <div className="flex flex-col md:flex-row gap-3 md:gap-4 mb-8 md:mb-12 p-4 md:p-5 bg-neutral-900/40 backdrop-blur-xl rounded-2xl border border-white/5 shadow-2xl">
                             <div className="relative flex-1">
                                 <Icon name="search" size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-neutral-500" />
                                 <Input type="text" placeholder="Search memories..." value={archiveSearch} onChange={(e) => setArchiveSearch(e.target.value)} className="pl-11 bg-neutral-950/80 border-neutral-800/80 h-11" />
@@ -1328,7 +1463,7 @@ export default function MemoryBook() {
                         </div>
                     )}
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-10">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-8 md:gap-y-10">
                         {Object.keys(groupedArchive).length === 0 ? (
                             <div className="col-span-full text-center py-20 text-neutral-500 border border-dashed border-neutral-800/50 rounded-3xl bg-neutral-900/20 backdrop-blur-sm">
                                 {archivedItems.length === 0 ? "The sky is waiting for its first star." : "No memories found matching your search."}
@@ -1346,7 +1481,7 @@ export default function MemoryBook() {
                                             <ArchivedItem
                                                 key={item.id} item={item}
                                                 onRestore={handleRestore}
-                                                onUpdate={(id, updates) => updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'archivedItems', id), updates)}
+                                                onUpdate={(id, updates) => run(() => updateDoc(docRef('archivedItems', id), updates))}
                                                 onPrint={handlePrint}
                                             />
                                         ))}
@@ -1362,17 +1497,17 @@ export default function MemoryBook() {
             {isVaultOpen && (
                 <div className="fixed inset-0 z-50 flex justify-end">
                     <div className="absolute inset-0 bg-neutral-950/60 backdrop-blur-sm transition-opacity" onClick={() => setIsVaultOpen(false)} />
-                    <div className="w-full max-w-md h-full bg-neutral-950/95 border-l border-white/10 relative flex flex-col shadow-2xl animate-in slide-in-from-right duration-300">
-                        <div className="p-8 border-b border-white/5 flex items-center justify-between bg-gradient-to-b from-purple-500/5 to-transparent">
+                    <div role="dialog" aria-modal="true" aria-labelledby="dream-vault-title" className="w-full max-w-md h-full bg-neutral-950/95 border-l border-white/10 relative flex flex-col shadow-2xl animate-in slide-in-from-right duration-300">
+                        <div className="p-6 sm:p-8 border-b border-white/5 flex items-center justify-between bg-gradient-to-b from-purple-500/5 to-transparent">
                             <div>
-                                <h3 className="text-2xl font-serif text-white mb-1">Dream Vault</h3>
+                                <h3 id="dream-vault-title" className="text-2xl font-serif text-white mb-1">Dream Vault</h3>
                                 <p className="text-xs tracking-wide text-purple-300/70 uppercase font-bold">Future Memories & Ideas</p>
                             </div>
-                            <Button variant="ghost" size="icon" onClick={() => setIsVaultOpen(false)} className="text-neutral-400 rounded-full hover:bg-white/10"><Icon name="x" size={20} /></Button>
+                            <Button variant="ghost" size="icon" onClick={() => setIsVaultOpen(false)} aria-label="Close Dream Vault" className="h-10 w-10 text-neutral-400 rounded-full hover:bg-white/10"><Icon name="x" size={20} /></Button>
                         </div>
 
-                        <div className="p-8 flex-1 overflow-y-auto custom-scrollbar">
-                            <form onSubmit={(e) => { e.preventDefault(); const val = e.target.elements.idea.value.trim(); if (val) { addDoc(getColRef('ideaVault'), { text: val, createdAt: Date.now() }); e.target.reset(); } }} className="mb-8 flex gap-3">
+                        <div className="p-6 sm:p-8 flex-1 overflow-y-auto overscroll-contain custom-scrollbar">
+                            <form onSubmit={(e) => { e.preventDefault(); const val = e.target.elements.idea.value.trim(); if (val) { run(() => addDoc(getColRef('ideaVault'), { text: val, createdAt: Date.now() })); e.target.reset(); } }} className="mb-8 flex gap-3">
                                 <Input name="idea" placeholder="Drop a new idea..." className="bg-neutral-900/50 border-neutral-800" />
                                 <button type="submit" className="h-10 px-4 shrink-0 rounded-lg flex items-center justify-center bg-purple-500 text-white hover:bg-purple-400 transition-all shadow-[0_0_15px_rgba(168,85,247,0.3)]">
                                     <Icon name="plus" size={16} />
@@ -1384,28 +1519,44 @@ export default function MemoryBook() {
                                     <SpotlightCard key={item.id} spotlightColor="rgba(255,255,255,0.05)" className="bg-neutral-900/40 border border-neutral-800/80 rounded-2xl p-5 group card-enter">
                                         <p className="text-sm text-neutral-200 mb-5 leading-relaxed">{item.text}</p>
                                         <div className="flex flex-wrap gap-2">
-                                            <Button variant="outline" size="sm" onClick={() => { addDoc(getColRef('ankItems'), { text: item.text, date: new Date().toISOString(), createdAt: Date.now() }); deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ideaVault', item.id)); }} className="h-8 text-xs bg-neutral-950/50 gap-2 border-indigo-500/20 hover:border-indigo-500/50 hover:text-indigo-300 rounded-lg"><Icon name="moon" size={12} /> Ank</Button>
-                                            <Button variant="outline" size="sm" onClick={() => { addDoc(getColRef('amyItems'), { text: item.text, date: new Date().toISOString(), createdAt: Date.now() }); deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ideaVault', item.id)); }} className="h-8 text-xs bg-neutral-950/50 gap-2 border-amber-500/20 hover:border-amber-500/50 hover:text-amber-300 rounded-lg"><Icon name="sun" size={12} /> Amy</Button>
-                                            <div className="relative group/dropdown">
-                                                <Button variant="outline" size="sm" className="h-8 text-xs border-cyan-400/30 text-cyan-400 bg-cyan-400/5 gap-2 rounded-lg hover:bg-cyan-400/10"><Icon name="sparkles" size={12} /> Shared</Button>
-                                                <div className="absolute top-full right-0 mt-2 w-48 bg-neutral-900/95 backdrop-blur-xl border border-neutral-700/50 rounded-xl shadow-2xl opacity-0 invisible group-hover/dropdown:opacity-100 group-hover/dropdown:visible transition-all z-20 p-1.5 transform origin-top-right scale-95 group-hover/dropdown:scale-100">
-                                                    {CATEGORIES.map(cat => {
-                                                        const isFull = !!sharedItems[cat.id];
-                                                        return (
-                                                            <button key={cat.id} disabled={isFull} onClick={() => { setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sharedItems', cat.id), { text: item.text, date: new Date().toISOString(), createdAt: Date.now() }); deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'ideaVault', item.id)); }} className="w-full text-left px-3 py-2.5 text-xs text-neutral-300 hover:bg-neutral-800 hover:text-white rounded-lg disabled:opacity-30 flex justify-between items-center transition-colors">
-                                                                {cat.label} {isFull && <Icon name="lock" size={12} />}
-                                                            </button>
-                                                        );
-                                                    })}
-                                                </div>
-                                            </div>
+                                            <Button variant="outline" size="sm" onClick={() => moveItem(docRef('ideaVault', item.id), 'ankItems', { text: item.text, date: new Date().toISOString(), createdAt: Date.now() })} className="h-8 text-xs bg-neutral-950/50 gap-2 border-indigo-500/20 hover:border-indigo-500/50 hover:text-indigo-300 rounded-lg"><Icon name="moon" size={12} /> Ank</Button>
+                                            <Button variant="outline" size="sm" onClick={() => moveItem(docRef('ideaVault', item.id), 'amyItems', { text: item.text, date: new Date().toISOString(), createdAt: Date.now() })} className="h-8 text-xs bg-neutral-950/50 gap-2 border-amber-500/20 hover:border-amber-500/50 hover:text-amber-300 rounded-lg"><Icon name="sun" size={12} /> Amy</Button>
+                                            <Button variant="outline" size="sm" onClick={() => setSharedMenuFor(sharedMenuFor === item.id ? null : item.id)} aria-expanded={sharedMenuFor === item.id} className="h-8 text-xs border-cyan-400/30 text-cyan-400 bg-cyan-400/5 gap-2 rounded-lg hover:bg-cyan-400/10">
+                                                <Icon name="sparkles" size={12} /> Shared
+                                                <Icon name="chevronDown" size={12} className={`transition-transform ${sharedMenuFor === item.id ? 'rotate-180' : ''}`} />
+                                            </Button>
                                         </div>
+                                        {/* Opens on tap (hover menus don't work on phones) and expands inside the card. */}
+                                        {sharedMenuFor === item.id && (
+                                            <div className="grid grid-cols-2 gap-1.5 mt-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                                                {CATEGORIES.map(cat => {
+                                                    const isFull = !!sharedItems[cat.id];
+                                                    return (
+                                                        <button key={cat.id} disabled={isFull} onClick={() => { setSharedMenuFor(null); placeInSharedSlot(cat.id, item.text, { moveFrom: docRef('ideaVault', item.id), fromVault: true }); }} className="text-left px-3 py-2.5 text-[11px] tracking-wide text-neutral-300 bg-neutral-950/50 border border-neutral-800 hover:border-cyan-400/40 hover:text-white rounded-lg disabled:opacity-30 flex justify-between items-center gap-2 transition-colors">
+                                                            {cat.label} {isFull && <Icon name="lock" size={12} className="shrink-0" />}
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
                                     </SpotlightCard>
                                 ))}
                                 {ideaVault.length === 0 && <div className="text-center text-neutral-600 text-xs py-12 border border-dashed border-neutral-800/50 rounded-2xl bg-neutral-900/20">The vault is empty.</div>}
                             </div>
                         </div>
                     </div>
+                </div>
+            )}
+
+            {/* Save errors and notices, e.g. "that slot was just filled" */}
+            {toast && (
+                <div role="status" aria-live="polite" className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] w-max max-w-[calc(100%-2rem)] flex items-center gap-3 px-4 py-2.5 rounded-2xl border text-xs leading-relaxed text-center shadow-2xl backdrop-blur-xl animate-in fade-in slide-in-from-bottom-2 ${toast.tone === 'error' ? 'bg-red-950/80 border-red-500/30 text-red-200' : 'bg-neutral-900/90 border-white/10 text-neutral-200'}`}>
+                    <span>{toast.text}</span>
+                    {toast.action && (
+                        <button type="button" onClick={() => { const { onClick } = toast.action; clearTimeout(toastTimer.current); setToast(null); onClick(); }} className="h-8 px-3 -my-1 -mr-1.5 rounded-lg text-xs font-semibold text-[#ccff00] hover:bg-white/10 transition-colors">
+                            {toast.action.label}
+                        </button>
+                    )}
                 </div>
             )}
             </>
